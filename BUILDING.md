@@ -4,9 +4,9 @@
 
 The first CI milestone was a **CEF integration baseline**. It successfully built the official CEF `cefsimple` sample for Windows x64 using the pinned CEF distribution.
 
-The second milestone introduces the project's own CEF host source code. The phase-two workflow replaces the upstream sample's entry/application/handler source files inside the temporary CEF build tree, then builds the official CEF target with the Windows sandbox and CEF Chrome Bootstrap enabled. The upstream CEF source tree is modified only inside the disposable GitHub Actions runner; no third-party CEF source is committed to this repository.
+The second milestone introduces the project's own CEF host source code. The phase-two workflow places our entry/application/handler source files into the temporary CEF sample build target, then builds it with the Windows sandbox and CEF Chrome Bootstrap enabled. The upstream CEF source tree is modified only inside the disposable GitHub Actions runner; no third-party CEF source is committed to this repository.
 
-This is an integration prototype, not the finished browser interface. It currently creates one CEF browser window using CEF's default Chrome runtime style and opens Google as the initial page. The custom Win32 browser shell, tabs, address bar, downloads manager, Split Screen, and the other approved features remain subsequent implementation work; none are cancelled.
+This is an integration prototype, not the finished browser interface. It creates a native Win32 top-level window and embeds one CEF browser child using Alloy runtime style, which is appropriate for a project-owned native browser shell. The CEF Chrome Bootstrap process model and Chromium sandbox remain enabled. It opens Google as the initial test page. The address bar, tabs, downloads manager, Split Screen, and the other approved features remain subsequent implementation work; none are cancelled.
 
 ## Pinned CEF baseline
 
