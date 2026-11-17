@@ -1,74 +1,92 @@
 // Copyright (c) 2026 Desktop Browser project.
+// Minimal native Win32 host window containing a CEF browser child window.
 
 #include "simple_app.h"
+
+#include <windows.h>
 
 #include <string>
 
 #include "include/cef_browser.h"
 #include "include/cef_command_line.h"
-#include "include/views/cef_browser_view.h"
-#include "include/views/cef_window.h"
+#include "include/cef_request_context.h"
 #include "include/wrapper/cef_helpers.h"
 #include "simple_handler.h"
 
 namespace {
 
-class BrowserWindowDelegate : public CefWindowDelegate {
- public:
-  explicit BrowserWindowDelegate(CefRefPtr<CefBrowserView> browser_view)
-      : browser_view_(browser_view) {}
+constexpr wchar_t kWindowClassName[] = L"DesktopBrowserCEFHostWindow";
 
-  void OnWindowCreated(CefRefPtr<CefWindow> window) override {
-    window->AddChildView(browser_view_);
-    window->Show();
+SimpleHandler* GetWindowHandler(HWND window) {
+  return reinterpret_cast<SimpleHandler*>(
+      GetWindowLongPtrW(window, GWLP_USERDATA));
+}
+
+LRESULT CALLBACK BrowserWindowProc(HWND window,
+                                   UINT message,
+                                   WPARAM wparam,
+                                   LPARAM lparam) {
+  if (message == WM_NCCREATE) {
+    const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+    SetWindowLongPtrW(
+        window, GWLP_USERDATA,
+        reinterpret_cast<LONG_PTR>(create->lpCreateParams));
   }
 
-  void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
-    browser_view_ = nullptr;
-  }
+  SimpleHandler* handler = GetWindowHandler(window);
 
-  bool CanClose(CefRefPtr<CefWindow> window) override {
-    if (!browser_view_) {
-      return true;
+  switch (message) {
+    case WM_SIZE: {
+      if (handler) {
+        CefRefPtr<CefBrowser> browser = handler->GetBrowser();
+        if (browser) {
+          HWND browser_window = browser->GetHost()->GetWindowHandle();
+          if (browser_window) {
+            const int width = LOWORD(lparam);
+            const int height = HIWORD(lparam);
+            SetWindowPos(browser_window, nullptr, 0, 0, width, height,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+          }
+        }
+      }
+      return 0;
     }
-    CefRefPtr<CefBrowser> browser = browser_view_->GetBrowser();
-    return !browser || browser->GetHost()->TryCloseBrowser();
+
+    case WM_CLOSE: {
+      if (handler) {
+        CefRefPtr<CefBrowser> browser = handler->GetBrowser();
+        if (browser && !browser->GetHost()->TryCloseBrowser()) {
+          return 0;
+        }
+      }
+      DestroyWindow(window);
+      return 0;
+    }
+
+    case WM_DESTROY:
+      return 0;
   }
 
-  CefSize GetPreferredSize(CefRefPtr<CefView> view) override {
-    return CefSize(1000, 700);
-  }
+  return DefWindowProcW(window, message, wparam, lparam);
+}
 
-  cef_runtime_style_t GetWindowRuntimeStyle() override {
-    return CEF_RUNTIME_STYLE_DEFAULT;
-  }
+bool RegisterBrowserWindowClass(HINSTANCE instance) {
+  WNDCLASSEXW window_class = {};
+  window_class.cbSize = sizeof(window_class);
+  window_class.style = CS_HREDRAW | CS_VREDRAW;
+  window_class.lpfnWndProc = BrowserWindowProc;
+  window_class.hInstance = instance;
+  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  window_class.hbrBackground =
+      reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  window_class.lpszClassName = kWindowClassName;
 
- private:
-  CefRefPtr<CefBrowserView> browser_view_;
-
-  IMPLEMENT_REFCOUNTING(BrowserWindowDelegate);
-  DISALLOW_COPY_AND_ASSIGN(BrowserWindowDelegate);
-};
-
-class BrowserViewDelegate : public CefBrowserViewDelegate {
- public:
-  bool OnPopupBrowserViewCreated(
-      CefRefPtr<CefBrowserView> browser_view,
-      CefRefPtr<CefBrowserView> popup_browser_view,
-      bool is_devtools) override {
-    CefWindow::CreateTopLevelWindow(
-        new BrowserWindowDelegate(popup_browser_view));
+  if (RegisterClassExW(&window_class)) {
     return true;
   }
 
-  cef_runtime_style_t GetBrowserRuntimeStyle() override {
-    return CEF_RUNTIME_STYLE_DEFAULT;
-  }
-
- private:
-  IMPLEMENT_REFCOUNTING(BrowserViewDelegate);
-  DISALLOW_COPY_AND_ASSIGN(BrowserViewDelegate);
-};
+  return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
 
 }  // namespace
 
@@ -85,22 +103,47 @@ CefRefPtr<CefClient> SimpleApp::GetDefaultClient() {
 void SimpleApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
 
-  CefRefPtr<CefCommandLine> command_line =
-      CefCommandLine::GetGlobalCommandLine();
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+  if (!RegisterBrowserWindowClass(instance)) {
+    CefQuitMessageLoop();
+    return;
+  }
 
-  std::string initial_url = command_line->GetSwitchValue("url");
+  HWND window = CreateWindowExW(
+      0, kWindowClassName, L"Desktop Browser - CEF Host",
+      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1100, 760,
+      nullptr, nullptr, instance, handler_.get());
+
+  if (!window) {
+    CefQuitMessageLoop();
+    return;
+  }
+
+  ShowWindow(window, SW_SHOWNORMAL);
+  UpdateWindow(window);
+
+  RECT client_rect = {};
+  GetClientRect(window, &client_rect);
+
+  CefWindowInfo window_info;
+  window_info.SetAsChild(window, client_rect);
+
+  // Alloy runtime style is intentional here: the project owns the native
+  // Win32 top-level window and will add its own browser controls in later
+  // implementation stages. CEF Chrome Bootstrap and the sandbox remain on.
+  window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+
+  std::string initial_url =
+      CefCommandLine::GetGlobalCommandLine()->GetSwitchValue("url");
   if (initial_url.empty()) {
     initial_url = "https://www.google.com/";
   }
 
   CefBrowserSettings browser_settings;
-  CefRefPtr<CefBrowserView> browser_view =
-      CefBrowserView::CreateBrowserView(
-          handler_, initial_url, browser_settings, nullptr, nullptr,
-          new BrowserViewDelegate());
-
-  if (browser_view) {
-    CefWindow::CreateTopLevelWindow(
-        new BrowserWindowDelegate(browser_view));
+  if (!CefBrowserHost::CreateBrowser(
+          window_info, handler_, initial_url, browser_settings, nullptr,
+          nullptr)) {
+    DestroyWindow(window);
+    CefQuitMessageLoop();
   }
 }
