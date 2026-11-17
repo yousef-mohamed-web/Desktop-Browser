@@ -331,3 +331,30 @@ specification has been reviewed and agreed with the user.
 
 All approved requirements must remain traceable to Section 7.
 Any proposed change to the approved feature scope must follow Section 5.
+
+## Core Browser Interface — Approved Requirements (2026-11-17)
+
+### 1. Tab appearance
+- Tabs shall use a rectangular design similar to Google Chrome.
+- A tab shall display the website favicon when one is available.
+- A tab shall display the page title and a close control.
+
+### 2. Split Screen within a single tab
+- A single browser tab shall be able to display two websites side by side.
+- Each side shall have its own independent address/search bar and navigation context.
+- The user shall be able to enter a different URL or search query independently in either side.
+- The user shall also be able to select an already-open tab as the content for the second side.
+- Navigation in one side shall not change the website displayed in the other side.
+- The user shall be able to exit Split Screen and return to a single-page view.
+- The divider between the two sides shall be draggable to resize both sides freely, including unequal ratios such as 70/30.
+- Provide a way to restore an even 50/50 split.
+- Preserve the selected split ratio while navigating between websites within that split view.
+
+### 3. Ways to activate Split Screen
+All three activation methods are approved:
+- A dedicated Split Screen button in the browser toolbar.
+- A Split Screen option in the context menu opened by right-clicking a tab.
+- Dragging a tab and dropping it into the opposite side of the split view.
+
+These requirements are approved for the browser's planned first release. Do not omit or remove any item without the user's explicit approval.
+
