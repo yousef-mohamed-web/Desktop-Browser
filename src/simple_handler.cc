@@ -2,6 +2,7 @@
 
 #include "simple_handler.h"
 
+#include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/wrapper/cef_helpers.h"
 
