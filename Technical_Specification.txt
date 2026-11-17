@@ -1,5 +1,5 @@
 DESKTOP BROWSER — TECHNICAL SPECIFICATION
-Version: 0.6
+Version: 0.7
 Last updated: 2026-11-17
 Status: Architecture decisions and requirements; implementation has not started.
 
@@ -49,11 +49,11 @@ security updates are available.
 
 Approved browser engine: Chromium.
 Approved embedding framework: Chromium Embedded Framework (CEF).
-Approved CEF runtime: Alloy Runtime.
+Approved CEF integration model: modern Chrome Bootstrap, with Alloy Style only where appropriate for custom native-window integration.
 
 Architecture:
 - Embed Chromium using CEF.
-- Use Alloy Runtime.
+- Use the modern Chrome Bootstrap; use Alloy Style only where needed. Do not use the deprecated Alloy Bootstrap.
 - Build our own browser interface rather than relying on Chrome's
   built-in browser UI.
 - Use C++ for the native Windows application and CEF integration.
@@ -62,7 +62,7 @@ Architecture:
 - Build a custom optimization and management layer around CEF.
 
 Rationale:
-CEF + Alloy Runtime gives the project a suitable foundation for a
+CEF with Chrome Bootstrap and selective Alloy Style gives the project a suitable foundation for a
 custom desktop browser interface and substantial control over the
 browser experience.
 
@@ -149,7 +149,7 @@ Do not use single-process mode as a memory-saving shortcut.
 6. PERFORMANCE VALIDATION PLAN
 ============================================================
 
-Build a small CEF + Alloy prototype and measure it on representative
+Build a small CEF prototype using the selected modern Chrome Bootstrap integration and measure it on representative
 Windows 10 x64 hardware, especially a low-memory device where possible.
 
 Measure:
@@ -208,7 +208,7 @@ user's explicit approval.
 - Restore the most recently closed tab after accidental closure.
 - Open a new browser window.
 - Open a private-browsing (Incognito) window.
-- Save and restore tabs when the browser is restarted.
+- Save ordinary browsing sessions and provide a user-initiated way to restore them; normal startup still opens the Home Page only.
 - Provide a list of currently open tabs.
 
 7.3 Search and Websites
@@ -250,7 +250,7 @@ user's explicit approval.
 - Manage cache to reduce unnecessary data reloads.
 - Reduce background CPU usage.
 - Monitor browser resource usage.
-- Restore tabs after the browser is closed or crashes.
+- Preserve ordinary session state and provide user-initiated session recovery after normal closure; provide crash recovery separately. Neither behavior changes the approved Home-Page-only normal startup.
 
 Implementation and behavior notes:
 - These seven groups are all approved requirements, not a list of
@@ -278,7 +278,7 @@ Implementation and behavior notes:
 - 2 GB RAM as the minimum design target for basic browsing.
 - Chromium as the browser engine.
 - CEF as the embedding framework.
-- Alloy Runtime as the CEF runtime.
+- Modern Chrome Bootstrap as the CEF integration model, with Alloy Style only where appropriate.
 - Custom browser interface using C++ and native Windows facilities.
 - Custom optimization layer for tabs, memory, startup, network,
   and resource management.
@@ -352,7 +352,7 @@ Any proposed change to the approved feature scope must follow Section 5.
 
 ### 3. Ways to activate Split Screen
 All three activation methods are approved:
-- A dedicated Split Screen button in the browser toolbar.
+- A dedicated Split Screen command in the Tools menu (this later decision supersedes the earlier toolbar-button proposal).
 - A Split Screen option in the context menu opened by right-clicking a tab.
 - Dragging a tab and dropping it into the opposite side of the split view.
 
@@ -471,3 +471,178 @@ The following technology choices are selected for the Windows 10 x64 desktop bro
 ### Explicitly Excluded
 - Do not implement system-wide internet blocking or control of other applications' network access. This idea was withdrawn by the user and is not part of the product scope.
 - Do not add Qt to the first-release UI stack unless later evidence demonstrates a compelling need and the user approves the change.
+
+
+## Additional Product Requirements — Security, User Data, Browser Functions, Reliability, and Distribution (2026-11-17)
+
+The following requirements extend the approved browser specification. They are included in the planned product scope for detailed design. They do not remove, weaken, or replace any previously approved feature. Where a behavior requires a detailed policy or user-facing choice, define it before implementation.
+
+### 1. Security and Privacy
+
+#### 1.1 Password Manager
+- Provide an integrated password manager that can securely save, view, edit, and delete credentials with clear user consent.
+- Offer password autofill on matching websites, with safeguards against filling credentials on unrelated or deceptive origins.
+- Protect locally stored secrets using Windows Data Protection API (DPAPI) or an equivalently strong Windows-backed protection mechanism.
+- Do not store passwords as plaintext in SQLite, JSON, logs, crash reports, or ordinary profile files.
+- Require appropriate user interaction or Windows authentication before revealing sensitive saved credentials where feasible.
+- Provide controls to review and delete saved passwords.
+
+#### 1.2 Malicious and Deceptive Website Protection
+- Provide warnings for known phishing, malware, and other unsafe websites using a maintained protection source or service compatible with the selected Chromium/CEF version.
+- Define how protection data is updated, how freshness is monitored, and what happens when the protection service is unavailable.
+- Do not claim protection is comprehensive or real-time unless the implementation and data source support that claim.
+- Present clear interstitial warnings and explain the risk before a user proceeds.
+
+#### 1.3 HTTPS and Certificate Errors
+- Preserve Chromium's certificate validation and secure-connection checks.
+- Clearly warn about expired, invalid, mismatched, or untrusted certificates.
+- Do not silently bypass certificate errors or provide a global option that disables certificate validation.
+- Any exceptional user override must be explicit, narrowly scoped, and clearly warned about, consistent with Chromium/CEF security constraints.
+
+#### 1.4 Download and File Safety
+- Warn users before opening potentially dangerous downloaded files, especially executable or script formats.
+- Preserve Windows and Chromium security signals such as file origin/mark-of-the-web behavior where applicable.
+- Do not automatically execute downloaded files.
+- Make file type, source website, and the action being confirmed clear to the user.
+
+#### 1.5 Website Permissions
+- Persist user decisions for individual website permissions where appropriate.
+- Provide a central interface to review, change, and revoke permissions.
+- Cover camera, microphone, geolocation, notifications, pop-ups, clipboard access, and other permissions exposed by the selected Chromium/CEF version.
+- Clearly distinguish allow-once, allow-for-this-site, and block behavior where supported.
+- Private browsing permission behavior and persistence must be separately specified; private-session data must not leak into ordinary profiles.
+
+#### 1.6 Private Browsing Data Isolation
+- Private browsing must use isolated, temporary session data and must not write ordinary history, cookies, form data, or session restoration records.
+- On closing the final private window, clear private-session storage and temporary data according to Chromium's private-browsing model.
+- Do not restore private windows or private tabs as ordinary browsing sessions after a restart or crash.
+- Clearly explain that private browsing does not make a user anonymous to websites, network operators, employers, or internet providers.
+
+### 2. User Profiles and Personal Data Management
+
+#### 2.1 Browser Profiles
+- Support a default browser profile and design the data model so multiple independent profiles can be supported.
+- Each profile must have separate bookmarks, history, cookies, permissions, saved passwords, preferences, and session data.
+- Do not mix private-browsing data with any normal profile.
+- Profile creation, naming, switching, and deletion behavior must be specified in the UI design.
+
+#### 2.2 Data Storage
+- Store user data in the appropriate per-user Windows application-data locations, separate from the installation directory.
+- Define and document the exact storage locations and data ownership for profiles, downloads metadata, cache, logs, and temporary files.
+- Apply appropriate filesystem permissions and avoid exposing sensitive profile data to other Windows users.
+- Keep secrets protected using Windows-backed encryption; ordinary settings and non-secret metadata may use the selected SQLite/JSON approach.
+
+#### 2.3 Backup, Import, and Export
+- Provide bookmark import and export using common interoperable formats such as HTML.
+- Provide a way to back up and restore supported browser profile data, with clear information about what is and is not included.
+- Protect backups containing sensitive information; do not export passwords in plaintext by default.
+- Provide safe handling for malformed, oversized, or untrusted imported files.
+- Preserve existing user data when upgrading the browser.
+
+#### 2.4 Reset and Uninstall
+- Provide a browser reset option with a clear explanation of which settings and data will be reset.
+- Do not delete user profiles, downloads, or personal data during reset unless the user explicitly selects those items and confirms.
+- During uninstall, clearly offer whether to retain or remove user data; do not silently delete it.
+- Make the consequences of deleting profiles or personal data clear before confirmation.
+
+### 3. Essential Browser Capabilities and User Experience
+
+- Built-in PDF viewing within the browser, including navigation, zoom, and download/open controls.
+- Printing and print preview using supported Windows/Chromium facilities.
+- Correct handling of file uploads, downloads, and file-picker dialogs.
+- Reliable copy, cut, paste, text selection, drag-and-drop, and clipboard interactions.
+- Audio and video playback with per-tab mute/unmute controls and visible media state.
+- Website notification support with permission controls and a way to manage or clear notifications.
+- Keyboard shortcuts for common browser actions, including tab/window navigation, address bar focus, reload, downloads, history, bookmarks, zoom, and closing/reopening tabs.
+- Context menus for pages, links, images, selected text, tabs, and browser controls, with actions appropriate to the clicked item.
+- Safe and understandable handling of external-protocol links that request opening another installed application; ask for confirmation when appropriate and avoid launching unknown handlers silently.
+- Support per-site zoom preferences and a global default zoom setting.
+- Manage pop-ups with configurable blocking and per-site exceptions.
+- Support proxy configuration through appropriate Windows/Chromium-compatible settings, with clear connection status and authentication handling where supported.
+- Support display scaling and Windows DPI awareness so the interface remains usable on different resolutions and scaling factors.
+- Ensure core navigation and accessibility can be operated with the keyboard; do not make essential actions mouse-only.
+- Support robust Unicode text, right-to-left languages, and localization of browser-owned UI strings.
+
+### 4. Tab, Process, and Crash Reliability
+
+- Preserve Chromium's multi-process isolation so a renderer crash is contained where possible and does not unnecessarily terminate unrelated tabs or the browser UI.
+- Display a clear crashed-page state and provide a reload/recovery action.
+- Define recovery behavior for browser-process crashes, renderer crashes, GPU-process crashes, and unexpected application termination.
+- Maintain crash-recovery metadata for ordinary sessions in a crash-safe manner, without recording private sessions.
+- On an unexpected crash, offer recovery of eligible ordinary tabs after the next launch; this is distinct from normal startup, which must continue to open the Home Page only unless the user explicitly chooses recovery.
+- Keep session metadata updates resilient to partial writes and power loss; use atomic writes or transactional storage as appropriate.
+- Before suspending or discarding a tab, account for unsaved form data, active media, uploads, downloads, and other user-visible activity.
+- Do not terminate or suspend a tab in a way that silently loses an active download; downloads must be managed independently of the originating tab.
+- Define behavior under severe memory pressure, including graduated responses, user notification where appropriate, and protection of active work.
+- Test that a failure in one renderer or tab does not corrupt bookmarks, history, downloads, profiles, or other tabs.
+
+### 5. Updates, Installation, and Windows Integration
+
+#### 5.1 Browser and Engine Updates
+- Establish a documented update mechanism for the browser application and its CEF/Chromium runtime.
+- Track supported CEF branches and Chromium security releases; define a regular review and release cadence.
+- Prioritize critical security updates and communicate when an installed engine version is no longer supported.
+- Verify update authenticity and integrity using cryptographic signatures and/or hashes from a trusted release process.
+- Download updates safely, stage them separately, and avoid replacing files while they are in use.
+- Apply updates atomically where practical and preserve user profiles and settings.
+- Provide rollback or recovery to the previous known-good application version if an update fails.
+- Do not downgrade Chromium security protections as a workaround for update or compatibility issues.
+- Clearly disclose update behavior and any restart requirement.
+
+#### 5.2 Installer and Uninstaller
+- Provide a Windows installer suitable for Windows 10 x64.
+- Install required CEF runtime files and dependencies in the correct locations.
+- Support clean installation, upgrade installation, repair where feasible, and uninstallation.
+- Ensure installation and update operations do not overwrite or erase user profile data.
+- Provide clear choices for optional shortcuts and default-browser registration where supported.
+- Uninstall must explain and ask whether user data should be retained or removed.
+
+#### 5.3 Windows Security and Network Integration
+- Handle Windows Firewall prompts and network access failures transparently; do not attempt to bypass Windows security controls.
+- Ensure antivirus and endpoint security software can inspect the installed application and its updates.
+- Sign distributable executables and installers when a suitable code-signing certificate is available.
+- Do not require administrator privileges for ordinary per-user browsing or profile operations unless a specific installation mode requires them.
+- Do not implement system-wide internet blocking or control other applications' network access; that idea remains explicitly excluded.
+
+### 6. Additional Settings and Controls
+- Provide a configurable download folder and clear controls to open the folder or change the location.
+- Provide global and per-site page zoom controls.
+- Provide pop-up and notification settings, including per-site exceptions.
+- Provide proxy settings and explain whether the configuration applies to the browser profile or the whole application.
+- Allow users to manage search engines, including adding or editing supported search providers where technically feasible.
+- Provide language selection for browser-owned UI and ensure right-to-left layout is handled correctly.
+- Expose useful privacy and permission controls without hiding essential settings in obscure locations.
+
+### 7. Acceptance Tests for the Newly Added Requirements
+Before release, verify at minimum:
+- Passwords are never written in plaintext to profile databases, settings, logs, or crash reports.
+- Saved credentials are protected at rest and autofill is restricted to the correct website origin.
+- Unsafe-site warnings, HTTPS certificate warnings, and dangerous-download warnings behave as specified.
+- Site permissions persist correctly and can be reviewed and revoked.
+- Private browsing leaves no ordinary history/session restoration records after the private session ends.
+- Profiles remain isolated from one another.
+- Bookmark import/export and supported profile backup/restore work without corrupting existing data.
+- Reset and uninstall preserve user data unless the user explicitly confirms deletion.
+- PDF viewing, printing, media playback, file upload, clipboard, context menus, external links, and keyboard shortcuts work on representative websites.
+- A renderer crash does not unnecessarily crash unrelated tabs or corrupt browser data.
+- Crash recovery is offered separately from normal Home-Page-only startup and never restores private sessions.
+- Downloads continue independently when their originating tab is closed.
+- Updates are verified, preserve profile data, and can recover from an interrupted or failed update.
+- DPI scaling, Unicode, and right-to-left UI are tested at representative Windows display settings.
+
+### 8. Scope and Design Notes
+- The above items are now part of the specification backlog for the planned browser; detailed UI, defaults, edge cases, and acceptance thresholds must be finalized before implementation.
+- Inclusion in the specification does not imply that every feature is already implemented or that every external service is available without configuration.
+- Features dependent on third-party reputation feeds, update hosting, code signing, or Windows capabilities must have their dependencies and operational costs assessed.
+- Any proposal to remove, disable, or materially reduce an approved feature remains subject to the user's explicit approval under Section 5.
+- These additions do not authorize system-wide network filtering, disabling Chromium security features, or deleting previously approved functionality.
+
+## Clarification of Superseding Decisions (2026-11-17)
+
+To prevent older wording in this document from being interpreted as current instructions, the following decisions take precedence wherever earlier sections contain conflicting proposals:
+
+1. **CEF integration:** Use modern Chrome Bootstrap. Alloy Style may be used where appropriate for custom native-window integration. Do not use the deprecated Alloy Bootstrap or describe Alloy as a separate runtime.
+2. **Split Screen entry point:** The command belongs in the Tools menu, not as a permanently visible toolbar button. The tab context-menu and drag-and-drop activation methods remain approved.
+3. **Normal startup:** Open the built-in/configured Home Page only. Do not automatically restore the previous browsing session on an ordinary launch.
+4. **Session recovery:** Preserve ordinary session-recovery capability as a separate user-initiated action and provide crash recovery. Never restore private sessions as ordinary sessions.
+5. **Feature preservation:** All previously approved features remain in scope. The additions in this section expand the specification and do not replace or cancel earlier requirements.
