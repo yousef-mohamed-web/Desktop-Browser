@@ -1,0 +1,26 @@
+// Copyright (c) 2026 Desktop Browser project.
+
+#include "simple_handler.h"
+
+#include "include/cef_browser.h"
+#include "include/wrapper/cef_helpers.h"
+
+CefRefPtr<CefLifeSpanHandler> SimpleHandler::GetLifeSpanHandler() {
+  return this;
+}
+
+void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
+  CEF_REQUIRE_UI_THREAD();
+  ++browser_count_;
+}
+
+void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+  CEF_REQUIRE_UI_THREAD();
+  if (browser_count_ > 0) {
+    --browser_count_;
+  }
+
+  if (browser_count_ == 0) {
+    CefQuitMessageLoop();
+  }
+}
