@@ -12,16 +12,15 @@ CefRefPtr<CefLifeSpanHandler> SimpleHandler::GetLifeSpanHandler() {
 
 void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
-  ++browser_count_;
+  browser_ = browser;
 }
 
 void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
-  if (browser_count_ > 0) {
-    --browser_count_;
-  }
+  browser_ = nullptr;
+  CefQuitMessageLoop();
+}
 
-  if (browser_count_ == 0) {
-    CefQuitMessageLoop();
-  }
+CefRefPtr<CefBrowser> SimpleHandler::GetBrowser() const {
+  return browser_;
 }
