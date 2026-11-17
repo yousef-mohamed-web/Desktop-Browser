@@ -1,0 +1,219 @@
+DESKTOP BROWSER — TECHNICAL SPECIFICATION
+Version: 0.4
+Last updated: 2026-11-17
+Status: Architecture decisions and requirements; implementation has not started.
+
+============================================================
+1. PROJECT GOAL
+============================================================
+
+Build a fast, lightweight Windows desktop browser, prioritizing low-end
+computers while preserving modern website compatibility, security,
+and stability.
+
+Primary goals:
+- Fast application startup and page loading.
+- Low RAM consumption, including with multiple tabs.
+- Low CPU usage during idle and ordinary browsing.
+- Efficient network and cache usage, with optional data-saving features.
+- Support for modern web standards and JavaScript.
+- Maintain security and stability through engine updates.
+
+"Fastest browser" is not a claim until demonstrated by repeatable
+comparative benchmarks.
+
+============================================================
+2. TARGET PLATFORM AND HARDWARE
+============================================================
+
+- Operating system: Windows 10 only.
+- Architecture: 64-bit (x64) only.
+- Windows 11 is outside the current project scope.
+- No 32-bit build is planned.
+- Prioritize very low-end processors and computers.
+- Minimum design target: 2 GB RAM for basic browsing.
+
+The 2 GB target is not a guarantee that every modern, resource-heavy
+website or many simultaneous tabs will run smoothly. Windows and
+modern websites also consume substantial memory.
+
+Platform note:
+Microsoft ended general support for Windows 10 on 2025-10-14.
+The project must account for the security implications and keep the
+browser engine and dependencies updated for as long as compatible
+security updates are available.
+
+============================================================
+3. APPROVED ENGINE AND RUNTIME
+============================================================
+
+Approved browser engine: Chromium.
+Approved embedding framework: Chromium Embedded Framework (CEF).
+Approved CEF runtime: Alloy Runtime.
+
+Architecture:
+- Embed Chromium using CEF.
+- Use Alloy Runtime.
+- Build our own browser interface rather than relying on Chrome's
+  built-in browser UI.
+- Use C++ for the native Windows application and CEF integration.
+- Use native Windows facilities where appropriate for desktop
+  integration, windows, menus, and files.
+- Build a custom optimization and management layer around CEF.
+
+Rationale:
+CEF + Alloy Runtime gives the project a suitable foundation for a
+custom desktop browser interface and substantial control over the
+browser experience.
+
+Important boundaries:
+- We are not building a new rendering engine.
+- We are not planning to modify Chromium's internal source code
+  at this stage.
+- CEF + Alloy is an approved architecture choice, not a proven claim
+  that it is lighter or faster than every alternative.
+- Track compatible CEF/Chromium releases and establish a security
+  update and distribution process.
+
+============================================================
+4. HYBRID OPTIMIZATION APPROACH
+============================================================
+
+"Hybrid" means one rendering engine (Chromium through CEF) combined
+with our own native application and optimization layer.
+
+It does NOT mean embedding multiple browser engines, such as
+Chromium and Gecko, in the same browser.
+
+Proposed custom systems:
+
+4.1 Smart Tab Manager
+- Manage tab lifecycle and resource use.
+- Consider delaying work for tabs that do not need immediate loading.
+- Suspend or discard inactive-tab resources when appropriate.
+- Restore tabs when the user returns, handling unsaved page state
+  carefully.
+
+4.2 Adaptive Memory Manager
+- Monitor memory use and system memory pressure.
+- Apply graduated memory-saving actions.
+- Prioritize low-memory devices, especially 2 GB systems.
+- Avoid unnecessary reloads and loss of user work.
+
+4.3 Network Optimizer
+- Improve cache usage.
+- Offer optional ad and tracker blocking.
+- Offer optional data-saving behavior for images, video, and
+  background requests.
+- Avoid silently breaking normal website functionality.
+
+4.4 Smart Startup
+- Display the application interface promptly.
+- Initialize engine components in a measured, staged manner.
+- Delay nonessential background work where safe.
+- Measure window appearance separately from first-page readiness.
+
+4.5 Resource Controller
+- Monitor CPU, RAM, and GPU-related resource usage.
+- Adapt nonessential work to device capability and current pressure.
+- Avoid optimizations that compromise compatibility or security.
+
+4.6 Security Manager
+- Preserve Chromium security features, including sandboxing and
+  site isolation where supported and appropriate.
+- Manage permissions, downloads, and security-sensitive behavior.
+- Maintain a defined process for CEF/Chromium security updates.
+
+============================================================
+5. FEATURE-PRESERVATION RULE — USER APPROVAL REQUIRED
+============================================================
+
+The user must be consulted before any browser feature is removed,
+disabled, or deliberately reduced.
+
+Before proposing such a change:
+1. Identify the feature and why a change is being considered.
+2. Explain the expected performance benefit.
+3. Explain compatibility, usability, and security consequences.
+4. Offer alternatives that preserve the feature where possible.
+5. Wait for the user's explicit approval before removing or disabling it.
+
+This rule applies even when a feature appears resource-intensive.
+Prefer optimizing how a feature is implemented before proposing
+its removal.
+
+Do not disable sandboxing or site isolation merely to reduce RAM.
+Do not use single-process mode as a memory-saving shortcut.
+
+============================================================
+6. PERFORMANCE VALIDATION PLAN
+============================================================
+
+Build a small CEF + Alloy prototype and measure it on representative
+Windows 10 x64 hardware, especially a low-memory device where possible.
+
+Measure:
+1. Time until the application window appears.
+2. Time until the first page is usable.
+3. RAM at idle after the browser settles.
+4. RAM with one page and a consistent set of test websites.
+5. RAM with 5 and 10 tabs.
+6. CPU usage at idle and during browsing.
+7. Page-load performance.
+8. Download and installed size.
+9. Behavior under memory pressure.
+10. Stability, compatibility, and practicality of security updates.
+
+Test discipline:
+- Use the same device, websites, network conditions, and test steps.
+- Record exact CEF/Chromium versions and build settings.
+- Repeat measurements; do not rely on a single run.
+- Count all browser child processes, not only the main process.
+- Compare like-for-like conditions.
+- Do not claim CEF is inherently lighter than alternatives
+  without measurements.
+
+============================================================
+7. CURRENT APPROVED DECISIONS
+============================================================
+
+- Windows 10 only.
+- x64 only; no 32-bit build.
+- Prioritize low-end computers and processors.
+- 2 GB RAM as the minimum design target for basic browsing.
+- Chromium as the browser engine.
+- CEF as the embedding framework.
+- Alloy Runtime as the CEF runtime.
+- Custom browser interface using C++ and native Windows facilities.
+- Custom optimization layer for tabs, memory, startup, network,
+  and resource management.
+- Ask the user before removing or disabling any browser feature.
+
+============================================================
+8. NOT YET DECIDED
+============================================================
+
+- Complete browser feature list and interface design.
+- Which features belong in the first release versus later releases.
+- Exact tab suspension and discard rules.
+- Default behavior for ad/tracker blocking and data saving.
+- Installer, update, and engine distribution architecture.
+- Detailed permissions, privacy, and security user experience.
+- Benchmark acceptance thresholds.
+
+============================================================
+9. NEXT DESIGN STAGE
+============================================================
+
+Define the browser's complete feature and interface specification.
+
+For each feature, determine whether it is:
+- Required for the first usable release.
+- Important but suitable for a later release.
+- Optional and user-controlled.
+
+No feature is to be removed solely for performance without following
+the approval process in Section 5.
+
+Implementation planning and prototype development should follow
+agreement on the feature specification.
