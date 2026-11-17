@@ -431,10 +431,43 @@ All items in this section are approved requirements for the planned first releas
 - Do not automatically restore the tabs or windows that were open when the browser was last closed.
 - This changes automatic startup behavior only; it does not authorize removing other approved tab-management or session-recovery capabilities. Crash-recovery behavior and any separate manual session-recovery option remain to be specified.
 
-## System-Wide Internet Access Control — Feasibility Discussion (2026-11-17)
+## Technical Architecture — Selected Stack (2026-11-17)
 
-- The user asked whether the browser could control internet access for the entire Windows device, including blocking internet access for other applications while allowing or controlling the browser's own access.
-- This is technically feasible on Windows using Windows Filtering Platform (WFP), which supports application-aware network filtering and permit/block decisions.
-- A practical design would require a privileged Windows service or equivalent system component to manage filtering rules; this is beyond ordinary CEF browser-process functionality.
-- This is a feasibility discussion only, not an approved implementation requirement. Scope, controls, permissions, default state, exclusions, recovery behavior, and user confirmation requirements must be discussed and approved before adding it to the product feature scope.
-- Any future design must include a reliable way to restore normal connectivity, avoid accidentally blocking essential Windows/network services, and clearly communicate when system-wide blocking is active.
+The following technology choices are selected for the Windows 10 x64 desktop browser, prioritizing a complete browser experience, low resource use, security, maintainability, and compatibility with low-end devices.
+
+### Core Browser Architecture
+- Browser engine: Chromium, integrated through the Chromium Embedded Framework (CEF).
+- CEF integration model: use the modern Chrome Bootstrap. Use Alloy Style only where required for the custom native-window integration; do not use the deprecated Alloy Bootstrap.
+- Browser host and application logic: native C++.
+- Native user interface: Win32 API. Do not introduce Qt or another heavyweight UI framework for the first release.
+- Native drawing: use Windows-native drawing facilities where appropriate (Direct2D/DirectWrite for custom-drawn UI elements); avoid unnecessary visual effects and continuously animated UI.
+- Keep Chromium's multi-process architecture, Sandbox, and Site Isolation enabled. Do not use single-process mode or disable security features to reduce memory.
+
+### Build and Development Toolchain
+- Compiler/toolset: MSVC from Visual Studio 2022, using a CEF-compatible toolset and Windows SDK version for the selected CEF branch.
+- Build configuration: CMake.
+- Build executor/generator: Ninja for the application build where appropriate.
+- Language baseline: modern C++ supported by the selected CEF distribution and MSVC toolset; prefer C++20 for application-owned code only where it does not conflict with CEF requirements.
+- Use official CEF binary distributions for application development and integration. Do not build/fork all of Chromium from source unless a demonstrated requirement makes it necessary.
+
+### Local Data and Configuration
+- Embedded database: SQLite for bookmarks, browsing history, download records, and structured browser metadata.
+- Lightweight configuration: JSON for simple preferences and settings; do not use a database for every small setting.
+- Store user data in the appropriate Windows per-user application data directory, separate from the installation directory.
+
+### Testing, Diagnostics, and Reliability
+- Unit tests: GoogleTest for application-owned C++ logic.
+- Browser integration tests: automated CEF-based test harness and ChromeDriver where supported, plus real-site manual regression tests.
+- Performance diagnostics: Windows Performance Toolkit (WPR/WPA), Windows process/memory diagnostics, and Chromium/CEF tracing and diagnostics.
+- Crash diagnostics: use Chromium/CEF-supported crash reporting facilities where available; never collect or transmit crash data without a clear privacy policy and user disclosure.
+- Establish repeatable performance tests on low-end hardware, including the 2 GB RAM design target. Treat the target as a test requirement, not a guarantee that every modern website will run smoothly in 2 GB.
+
+### Resource and Security Policies
+- Prioritize fast cold start, low idle CPU usage, bounded background work, and memory-aware tab lifecycle management.
+- Preserve browser compatibility and security before attempting memory reductions. Any memory-saving behavior must be measured for impact on active pages, media, downloads, and session state.
+- Keep hardware acceleration enabled by default where supported, with graceful fallback for problematic or older graphics drivers; validate both accelerated and fallback paths.
+- Maintain a documented CEF/Chromium security-update process and regularly move to supported security-patched CEF branches.
+
+### Explicitly Excluded
+- Do not implement system-wide internet blocking or control of other applications' network access. This idea was withdrawn by the user and is not part of the product scope.
+- Do not add Qt to the first-release UI stack unless later evidence demonstrates a compelling need and the user approves the change.
