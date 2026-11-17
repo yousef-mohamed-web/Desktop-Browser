@@ -417,3 +417,24 @@ All items in this section are approved requirements for the planned first releas
 - Do not automatically restore the tabs or windows that were open when the browser was last closed.
 - This is the user's explicit startup preference and supersedes any earlier generic wording that implied automatic session restoration at startup.
 - This decision changes the automatic startup behavior only. It does not authorize removing other approved tab-management or session-related capabilities. Any separate manual session-recovery behavior, including how saved sessions may be accessed, remains to be specified; do not assume it is removed or automatically enabled.
+
+## Home Page and Startup Behavior — Approved Decisions (2026-11-17)
+
+### Built-in Home Page
+- The browser shall provide its own built-in Home Page; it is not merely a user-supplied website URL.
+- The page shall include a prominent search box and website shortcuts.
+- Keep the design familiar and simple, similar to the ordinary start pages users expect in mainstream browsers.
+- Prioritize fast display, low memory use, and low CPU overhead. Avoid unnecessary animations, heavy effects, and nonessential background work.
+
+### Startup
+- On a normal browser launch, open the configured Home Page only.
+- Do not automatically restore the tabs or windows that were open when the browser was last closed.
+- This changes automatic startup behavior only; it does not authorize removing other approved tab-management or session-recovery capabilities. Crash-recovery behavior and any separate manual session-recovery option remain to be specified.
+
+## System-Wide Internet Access Control — Feasibility Discussion (2026-11-17)
+
+- The user asked whether the browser could control internet access for the entire Windows device, including blocking internet access for other applications while allowing or controlling the browser's own access.
+- This is technically feasible on Windows using Windows Filtering Platform (WFP), which supports application-aware network filtering and permit/block decisions.
+- A practical design would require a privileged Windows service or equivalent system component to manage filtering rules; this is beyond ordinary CEF browser-process functionality.
+- This is a feasibility discussion only, not an approved implementation requirement. Scope, controls, permissions, default state, exclusions, recovery behavior, and user confirmation requirements must be discussed and approved before adding it to the product feature scope.
+- Any future design must include a reliable way to restore normal connectivity, avoid accidentally blocking essential Windows/network services, and clearly communicate when system-wide blocking is active.
