@@ -1,0 +1,193 @@
+name: Desktop Browser - CEF Windows x64 Host
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-browser-cef-host-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-browser-host:
+    name: Build project CEF host (Windows x64, sandboxed)
+    runs-on: windows-2022
+    timeout-minutes: 75
+
+    env:
+      CEF_VERSION: "156.0.14+g4fa4ab5+chromium-156.0.8078.48"
+      CEF_PLATFORM: "windows64"
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Show build environment
+        shell: pwsh
+        run: |
+          cmake --version
+          Get-ChildItem Env:VCToolsInstallDir, Env:WindowsSdkDir -ErrorAction SilentlyContinue
+          if (-not (Test-Path "src/cefsimple_win.cc")) {
+            throw "The project CEF host source files are missing."
+          }
+
+      - name: Download and verify official CEF distribution
+        shell: pwsh
+        run: |
+          $archiveName = "cef_binary_$($env:CEF_VERSION)_$($env:CEF_PLATFORM).tar.bz2"
+          $encodedName = [Uri]::EscapeDataString($archiveName)
+          $baseUrl = "https://cef-builds.spotifycdn.com/$encodedName"
+          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+          $hashPath = "$archivePath.sha1"
+
+          Invoke-WebRequest -Uri "$baseUrl.sha1" -OutFile $hashPath
+          $expectedHash = (Get-Content $hashPath -Raw).Trim().Split()[0].ToLowerInvariant()
+          if ($expectedHash -notmatch '^[a-f0-9]{40}$') {
+            throw "The official CEF checksum file is invalid."
+          }
+
+          Write-Host "Downloading pinned CEF Windows x64 distribution..."
+          Invoke-WebRequest -Uri $baseUrl -OutFile $archivePath
+          $actualHash = (Get-FileHash -Path $archivePath -Algorithm SHA1).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "CEF archive checksum mismatch. Expected $expectedHash, got $actualHash."
+          }
+
+          "CEF_ARCHIVE=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Official CEF archive checksum verified."
+
+      - name: Extract CEF distribution
+        shell: pwsh
+        timeout-minutes: 25
+        run: |
+          $extractRoot = Join-Path $env:RUNNER_TEMP "cef-host"
+          New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+
+          $sevenZipCandidates = @(
+            (Join-Path $env:ProgramFiles "7-Zip\7z.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "7-Zip\7z.exe")
+          )
+          $sevenZip = $sevenZipCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+          if ($sevenZip) {
+            & $sevenZip x $env:CEF_ARCHIVE "-o$extractRoot" -y
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip could not decompress the CEF archive." }
+            $tarFile = Get-ChildItem -Path $extractRoot -Filter "*.tar" -File | Select-Object -First 1
+            if (-not $tarFile) { throw "The CEF TAR payload is missing." }
+            & $sevenZip x $tarFile.FullName "-o$extractRoot" -y
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip could not extract the CEF TAR payload." }
+          } else {
+            tar -xjf $env:CEF_ARCHIVE -C $extractRoot
+            if ($LASTEXITCODE -ne 0) { throw "Windows tar could not extract the CEF archive." }
+          }
+
+          $cefRoot = Join-Path $extractRoot "cef_binary_$($env:CEF_VERSION)_$($env:CEF_PLATFORM)"
+          $sampleRoot = Join-Path $cefRoot "tests/cefsimple"
+          if (-not (Test-Path (Join-Path $cefRoot "CMakeLists.txt"))) {
+            throw "The extracted CEF CMake project is missing."
+          }
+          if (-not (Test-Path $sampleRoot)) {
+            throw "The official CEF sample source directory is missing."
+          }
+
+          "CEF_ROOT=$cefRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CEF_SAMPLE_ROOT=$sampleRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install project host sources into the CEF sample build target
+        shell: pwsh
+        run: |
+          $mapping = @{
+            "src/cefsimple_win.cc" = "cefsimple_win.cc"
+            "src/simple_app.h" = "simple_app.h"
+            "src/simple_app.cc" = "simple_app.cc"
+            "src/simple_handler.h" = "simple_handler.h"
+            "src/simple_handler.cc" = "simple_handler.cc"
+            "src/simple_handler_win.cc" = "simple_handler_win.cc"
+          }
+
+          foreach ($source in $mapping.Keys) {
+            $sourcePath = Join-Path $env:GITHUB_WORKSPACE $source
+            if (-not (Test-Path $sourcePath)) {
+              throw "Missing project source: $source"
+            }
+            Copy-Item -Path $sourcePath -Destination (Join-Path $env:CEF_SAMPLE_ROOT $mapping[$source]) -Force
+          }
+
+          Write-Host "The official CEF target will now compile the project's own host sources."
+
+      - name: Configure CEF with the Windows sandbox and Chrome Bootstrap
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:CEF_ROOT "build"
+          cmake -S $env:CEF_ROOT -B $buildDir -G "Visual Studio 17 2022" -A x64 -DUSE_SANDBOX=ON
+          if ($LASTEXITCODE -ne 0) { throw "CEF CMake configuration failed." }
+
+      - name: Build the project host in Release x64
+        shell: pwsh
+        run: |
+          cmake --build (Join-Path $env:CEF_ROOT "build") --config Release --target cefsimple --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "The Desktop Browser CEF host build failed." }
+
+      - name: Stage and verify the sandboxed browser host
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $buildRoot = Join-Path $env:CEF_ROOT "build"
+          $bootstrap = Get-ChildItem -Path $buildRoot -Filter "cefsimple.exe" -File -Recurse |
+            Where-Object { $_.FullName -match '[\\/]Release[\\/]cefsimple\.exe$' } |
+            Select-Object -First 1
+          if (-not $bootstrap) {
+            throw "The CEF bootstrap executable was not found in Release output."
+          }
+
+          $appDll = Join-Path $bootstrap.DirectoryName "cefsimple.dll"
+          if (-not (Test-Path $appDll)) {
+            throw "The project application DLL is missing; sandboxed bootstrap output is incomplete."
+          }
+
+          $stage = Join-Path $env:RUNNER_TEMP "DesktopBrowser-CEF-Host"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path (Join-Path $bootstrap.DirectoryName "*") -Destination $stage -Recurse -Force
+
+          Rename-Item -Path (Join-Path $stage "cefsimple.exe") -NewName "DesktopBrowser.exe"
+          Rename-Item -Path (Join-Path $stage "cefsimple.dll") -NewName "DesktopBrowser.dll"
+
+          $required = @(
+            "DesktopBrowser.exe",
+            "DesktopBrowser.dll",
+            "libcef.dll",
+            "icudtl.dat",
+            "resources.pak",
+            "chrome_100_percent.pak",
+            "chrome_200_percent.pak",
+            "locales"
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path (Join-Path $stage $item))) {
+              throw "Required CEF runtime item is missing from the staged build: $item"
+            }
+          }
+
+          @(
+            "Product=Desktop Browser CEF Host"
+            "Architecture=Windows x64"
+            "CEF=$($env:CEF_VERSION)"
+            "Sandbox=Enabled (USE_SANDBOX=ON)"
+            "Bootstrap=CEF Chrome Bootstrap"
+            "RuntimeStyle=CEF default Chrome style"
+            "BuildConfiguration=Release"
+            "Note=Integration prototype only; not the finished browser interface."
+          ) | Set-Content -Path (Join-Path $stage "BUILD_INFO.txt") -Encoding UTF8
+
+          Get-ChildItem $stage | Select-Object Name, Length
+          "CEF_HOST_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload sandboxed Windows x64 host artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-browser-cef-host-x64
+          path: ${{ runner.temp }}/DesktopBrowser-CEF-Host/
+          if-no-files-found: error
+          retention-days: 7
