@@ -1,7 +1,7 @@
 DESKTOP BROWSER — TECHNICAL SPECIFICATION
-Version: 0.7
+Version: 0.8
 Last updated: 2026-11-17
-Status: Architecture decisions and requirements; implementation has not started.
+Status: Core product requirements and technical direction approved; ready to begin staged implementation.
 
 ============================================================
 1. PROJECT GOAL
@@ -17,7 +17,7 @@ Primary goals:
 - Low CPU usage during idle and ordinary browsing.
 - Efficient network and cache usage, with optional data-saving features.
 - Support for modern web standards and JavaScript.
-- Maintain security and stability through engine updates.
+- Maintain security and stability through a user-controlled, manual update process; never update automatically.
 
 "Fastest browser" is not a claim until demonstrated by repeatable
 comparative benchmarks.
@@ -579,15 +579,19 @@ The following requirements extend the approved browser specification. They are i
 ### 5. Updates, Installation, and Windows Integration
 
 #### 5.1 Browser and Engine Updates
-- Establish a documented update mechanism for the browser application and its CEF/Chromium runtime.
+- Provide a manual, user-initiated update mechanism for the browser application and its CEF/Chromium runtime. Automatic downloading, installation, or restarting for updates is prohibited.
 - Track supported CEF branches and Chromium security releases; define a regular review and release cadence.
 - Prioritize critical security updates and communicate when an installed engine version is no longer supported.
 - Verify update authenticity and integrity using cryptographic signatures and/or hashes from a trusted release process.
-- Download updates safely, stage them separately, and avoid replacing files while they are in use.
+- Only download an update after the user explicitly requests it. Stage it separately and avoid replacing files while they are in use.
 - Apply updates atomically where practical and preserve user profiles and settings.
 - Provide rollback or recovery to the previous known-good application version if an update fails.
 - Do not downgrade Chromium security protections as a workaround for update or compatibility issues.
-- Clearly disclose update behavior and any restart requirement.
+- Clearly disclose the selected version, release notes, security relevance, download size where known, and any restart requirement before the user confirms an update.
+- Never silently download, install, or restart the browser to apply an update.
+- The browser may display a non-blocking notice that a newer version is available, but checking for updates must be user-initiated unless the user later explicitly approves a different policy.
+- Provide a visible Check for updates action in Settings/About. The user decides whether to download and install any offered version.
+- Do not disable Chromium security protections because updates are manual. Clearly warn users when their installed Chromium/CEF version is outdated or no longer receiving security fixes.
 
 #### 5.2 Installer and Uninstaller
 - Provide a Windows installer suitable for Windows 10 x64.
@@ -627,7 +631,7 @@ Before release, verify at minimum:
 - A renderer crash does not unnecessarily crash unrelated tabs or corrupt browser data.
 - Crash recovery is offered separately from normal Home-Page-only startup and never restores private sessions.
 - Downloads continue independently when their originating tab is closed.
-- Updates are verified, preserve profile data, and can recover from an interrupted or failed update.
+- User-initiated updates are verified, preserve profile data, and can recover from an interrupted or failed update; no automatic update activity occurs.
 - DPI scaling, Unicode, and right-to-left UI are tested at representative Windows display settings.
 
 ### 8. Scope and Design Notes
@@ -646,3 +650,76 @@ To prevent older wording in this document from being interpreted as current inst
 3. **Normal startup:** Open the built-in/configured Home Page only. Do not automatically restore the previous browsing session on an ordinary launch.
 4. **Session recovery:** Preserve ordinary session-recovery capability as a separate user-initiated action and provide crash recovery. Never restore private sessions as ordinary sessions.
 5. **Feature preservation:** All previously approved features remain in scope. The additions in this section expand the specification and do not replace or cancel earlier requirements.
+
+
+## User Decision — No Automatic Updates (2026-11-17)
+
+The user explicitly requires that the browser must NOT perform automatic updates.
+
+Approved update behavior:
+- No automatic update checks in the background.
+- No automatic update downloads.
+- No automatic update installation.
+- No automatic browser restart to apply an update.
+- Provide a manual **Check for updates** action in Settings/About.
+- Only after the user initiates the check may the browser contact the update service and report whether an update is available.
+- Downloading and installing an offered update requires a separate, explicit user action.
+- Before installation, show the version, release notes, relevant security information, and restart requirement where available.
+- Preserve the existing verification, safe staging, profile preservation, and rollback requirements for manually initiated updates.
+- The browser may show a non-blocking reminder based on information already obtained during a manual check; it must not initiate a new background check.
+- Clearly warn when the installed CEF/Chromium version is outdated or no longer supported. Manual update preference does not justify weakening security protections.
+- Do not silently change this policy. Any future proposal for automatic checks or updates requires the user's explicit approval.
+
+## Technical Decision Authority and Implementation Policy (2026-11-17)
+
+The user has delegated remaining technical implementation choices to the assistant. The assistant is responsible for selecting and documenting the most suitable implementation details, libraries, internal architecture, build settings, and engineering practices for this project, subject to the approved product requirements and these constraints:
+
+- Prioritize Windows 10 x64 compatibility, low-end hardware, low memory and CPU overhead, security, stability, maintainability, and modern website compatibility.
+- Prefer the simplest dependable solution with the fewest unnecessary dependencies.
+- Use official and supported CEF interfaces and distributions; verify compatibility against the exact selected CEF branch before locking dependency versions.
+- Keep Chromium multi-process architecture, sandboxing, and site isolation enabled.
+- Do not introduce heavyweight frameworks or dependencies without a demonstrated technical need.
+- Do not remove, silently disable, or materially reduce any user-approved feature.
+- Do not implement system-wide internet blocking or control of other applications' network access.
+- Preserve the approved Home-Page-only normal startup behavior, user-controlled manual session recovery, and separate crash recovery.
+- Preserve the approved manual-only update policy.
+- Make engineering decisions autonomously where they do not change an explicit user-approved product behavior. Explain consequential decisions and their trade-offs in plain language.
+- Build and validate in small, testable stages. Each stage must compile and have appropriate tests before proceeding.
+- Do not claim a feature is complete merely because its UI exists; verify its behavior.
+- Keep the repository's existing scope and file policy intact: update the existing Technical_Specification.txt only when changing the specification; do not add source files or unrelated files to the GitHub repository without an explicit later instruction.
+- Begin implementation with a minimal CEF host prototype and validate startup, rendering, process model, shutdown, and basic navigation before layering on the full browser interface and feature systems.
+
+## Implementation Start Plan (2026-11-17)
+
+Implementation shall proceed in the following controlled stages. These stages organize delivery; they do not remove or cancel any approved feature.
+
+1. **Environment and CEF compatibility baseline**
+   - Select and pin a CEF binary distribution/branch compatible with the intended Windows 10 x64 deployment and available MSVC/Windows SDK toolchain.
+   - Record exact dependency versions, checksums, and required runtime files.
+   - Confirm build prerequisites and reproducible build instructions.
+
+2. **Minimal native CEF host prototype**
+   - Create a native Win32 C++ application using the selected modern CEF integration model.
+   - Initialize and shut down CEF correctly.
+   - Create the browser window and render a test page.
+   - Validate Chromium child processes, sandbox configuration, resource loading, and clean shutdown.
+   - Verify basic address navigation and error handling.
+
+3. **Application foundation**
+   - Establish the application lifecycle, logging policy, configuration loading, profile/data directories, and safe exception/error handling.
+   - Add automated unit tests and a repeatable build/test workflow.
+   - Establish a baseline for startup time, idle RAM, CPU use, and installed size.
+
+4. **Browser shell and navigation**
+   - Implement the native browser window, tab strip, address/search bar, navigation controls, menus, and built-in Home Page.
+   - Add tab lifecycle and window management while preserving all approved UI requirements.
+
+5. **Data, downloads, privacy, and security systems**
+   - Implement SQLite-backed metadata, bookmarks, history, profiles, permissions, password protection, private browsing isolation, and the complete approved Download Manager.
+   - Add file safety, PDF, printing, media, clipboard, notifications, and related browser capabilities.
+
+6. **Optimization, recovery, and distribution**
+   - Implement measured tab/memory management, crash recovery, manual-only update workflow, installer, diagnostics, and performance tuning.
+   - Validate on low-end Windows 10 x64 hardware, including the 2 GB RAM design target where available.
+
+At every stage, retain traceability to the approved requirements and test the implementation before moving to the next stage.
