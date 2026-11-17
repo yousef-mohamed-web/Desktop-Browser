@@ -399,3 +399,14 @@ The selected method shall be user-controlled; do not force one method for all do
 
 All items in this section are approved requirements for the planned first release. Do not omit, silently downgrade, or remove any item without the user's explicit approval.
 
+### E. Download Manager progress display — approved visual behavior
+- Each file shall appear as one download item/row in the downloads list, regardless of how many internal chunks or connections are used.
+- For chunked downloads, show the internal chunks visually within that same download item, following the ADM-style segmented progress presentation agreed with the user.
+- Show a separate progress indicator for each internal chunk so the user can see the progress of the individual parts.
+- Do not present the chunks as separate files or separate top-level download entries.
+- Clearly identify the selected method as either **Chunked / Multi-connection** or **Standard / Single connection**.
+- For standard downloads, show a single overall progress indicator rather than multiple chunk indicators.
+- Keep the overall file progress, downloaded/total size, speed, and estimated remaining time visible where available.
+- Provide Pause, Resume, Cancel, and Retry controls for the overall file download; the user controls the complete download as one operation.
+- The agreed visual reference is the ADM-style presentation shown in the conversation: one file item with its overall progress and visible internal segment progress in the same item. Do not replace this with a separate list of chunk downloads or a different presentation without the user's approval.
+
