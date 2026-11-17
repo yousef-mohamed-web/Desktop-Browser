@@ -1,5 +1,5 @@
 DESKTOP BROWSER — TECHNICAL SPECIFICATION
-Version: 0.4
+Version: 0.5
 Last updated: 2026-11-17
 Status: Architecture decisions and requirements; implementation has not started.
 
@@ -174,7 +174,97 @@ Test discipline:
   without measurements.
 
 ============================================================
-7. CURRENT APPROVED DECISIONS
+7. APPROVED BROWSER FEATURE REQUIREMENTS — FIRST RELEASE
+============================================================
+
+The user explicitly approved all seven feature groups below as part
+of the browser's required feature scope. Every listed item is retained.
+No item in this section is to be silently omitted, removed, or treated
+as out of scope. Implementation may be planned and delivered in stages,
+but staging does not mean cancellation. Any later proposal to remove,
+disable, or reduce a feature must follow Section 5 and receive the
+user's explicit approval.
+
+7.1 Core Browser Interface
+- Address bar that also accepts search queries.
+- Back button.
+- Forward button.
+- Reload button.
+- Stop-loading button.
+- Home button.
+- Create a new tab and close the current tab.
+- Display multiple tabs and switch between them.
+- Display a page-loading indicator.
+- Open links in a new tab or a new window.
+
+7.2 Tab and Window Management
+- Open, close, and reorder tabs.
+- Duplicate a tab.
+- Restore the most recently closed tab after accidental closure.
+- Open a new browser window.
+- Open a private-browsing (Incognito) window.
+- Save and restore tabs when the browser is restarted.
+- Provide a list of currently open tabs.
+
+7.3 Search and Websites
+- Google as the default search engine.
+- Allow the user to change the search engine to Bing or other
+  supported search engines.
+- Add websites to bookmarks.
+- Maintain browsing history.
+- Manage bookmarks and browsing history.
+
+7.4 Downloads
+- Download files from the internet.
+- Display download progress.
+- Pause, resume, and cancel downloads.
+- Open a file after its download completes.
+- Open the folder containing a downloaded file.
+- Manage the downloads list.
+
+7.5 Privacy and Security
+- Private browsing.
+- Manage cookies.
+- Clear browsing history and browsing data.
+- Control website permissions, including camera, microphone,
+  and geolocation.
+- Warn users about unsafe websites.
+- Preserve Chromium security protections, including sandboxing.
+
+7.6 Settings and Customization
+- Choose the home page.
+- Choose the search engine.
+- Choose the download location.
+- Light and dark themes.
+- Control font size and page zoom in/out.
+- Language settings.
+
+7.7 Performance and Resource Optimization Features
+- Intelligent RAM-usage management.
+- Suspend inactive tabs when appropriate and safely.
+- Manage cache to reduce unnecessary data reloads.
+- Reduce background CPU usage.
+- Monitor browser resource usage.
+- Restore tabs after the browser is closed or crashes.
+
+Implementation and behavior notes:
+- These seven groups are all approved requirements, not a list of
+  features that may be arbitrarily discarded for a lightweight build.
+- Where a feature has configurable behavior, its defaults and controls
+  will be specified during detailed design.
+- Tab suspension, cache management, and memory-saving actions must
+  protect user work and avoid unnecessary reloads.
+- Private browsing must not retain ordinary browsing history or
+  session data after the private session ends, subject to the detailed
+  privacy design.
+- Website permission controls and security warnings must be implemented
+  without weakening Chromium's security protections.
+- The browser must distinguish restoring ordinary sessions from
+  restoring private sessions; private session data must not be restored
+  as an ordinary session.
+
+============================================================
+8. CURRENT APPROVED DECISIONS
 ============================================================
 
 - Windows 10 only.
@@ -188,32 +278,38 @@ Test discipline:
 - Custom optimization layer for tabs, memory, startup, network,
   and resource management.
 - Ask the user before removing or disabling any browser feature.
+- All seven feature groups in Section 7 are approved requirements
+  for the first-release feature scope, with every listed sub-item kept.
 
 ============================================================
-8. NOT YET DECIDED
+9. NOT YET DECIDED
 ============================================================
 
-- Complete browser feature list and interface design.
-- Which features belong in the first release versus later releases.
+- Detailed visual design and layout of the browser interface.
+- Detailed behavior and UI for each approved feature in Section 7.
 - Exact tab suspension and discard rules.
-- Default behavior for ad/tracker blocking and data saving.
+- Default behavior for ad/tracker blocking and data saving; these
+  were proposed as optional capabilities in the optimization plan
+  and require a separate user decision.
 - Installer, update, and engine distribution architecture.
 - Detailed permissions, privacy, and security user experience.
 - Benchmark acceptance thresholds.
+- Whether additional features such as synchronization, extensions,
+  built-in translation, and reader mode will be included.
+
+The items above are unresolved design details or additional feature
+ideas. They do not cancel or reduce any approved requirement in Section 7.
 
 ============================================================
-9. NEXT DESIGN STAGE
+10. NEXT DESIGN STAGE
 ============================================================
 
-Define the browser's complete feature and interface specification.
+Proceed by detailing the seven approved feature groups one at a time.
+For each group, define its exact user interface, behavior, settings,
+edge cases, and acceptance tests before implementation.
 
-For each feature, determine whether it is:
-- Required for the first usable release.
-- Important but suitable for a later release.
-- Optional and user-controlled.
+Do not begin implementation until the detailed feature and interface
+specification has been reviewed and agreed with the user.
 
-No feature is to be removed solely for performance without following
-the approval process in Section 5.
-
-Implementation planning and prototype development should follow
-agreement on the feature specification.
+All approved requirements must remain traceable to Section 7.
+Any proposed change to the approved feature scope must follow Section 5.
