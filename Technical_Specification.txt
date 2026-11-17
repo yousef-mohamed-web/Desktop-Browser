@@ -1,5 +1,5 @@
 DESKTOP BROWSER — TECHNICAL SPECIFICATION
-Version: 0.5
+Version: 0.6
 Last updated: 2026-11-17
 Status: Architecture decisions and requirements; implementation has not started.
 
@@ -196,6 +196,11 @@ user's explicit approval.
 - Display multiple tabs and switch between them.
 - Display a page-loading indicator.
 - Open links in a new tab or a new window.
+- Use a classic rectangular tab design similar to Google Chrome.
+- Display each website's favicon in its tab when the website provides
+  one; show a default fallback icon when no favicon is available.
+- Support Split Screen within a single browser tab, displaying two
+  websites side by side in separate page areas within that tab.
 
 7.2 Tab and Window Management
 - Open, close, and reorder tabs.
@@ -285,7 +290,11 @@ Implementation and behavior notes:
 9. NOT YET DECIDED
 ============================================================
 
-- Detailed visual design and layout of the browser interface.
+- Detailed visual design and layout of the browser interface beyond
+  the approved classic rectangular tab shape and favicon behavior.
+- Detailed Split Screen interaction design, including how users open
+  the second page, resize or swap the two page areas, close one side,
+  and return to a single-page tab.
 - Detailed behavior and UI for each approved feature in Section 7.
 - Exact tab suspension and discard rules.
 - Default behavior for ad/tracker blocking and data saving; these
@@ -305,8 +314,17 @@ ideas. They do not cancel or reduce any approved requirement in Section 7.
 ============================================================
 
 Proceed by detailing the seven approved feature groups one at a time.
-For each group, define its exact user interface, behavior, settings,
-edge cases, and acceptance tests before implementation.
+The following Core Browser Interface decisions are already approved:
+- Classic rectangular tabs similar to Google Chrome.
+- Show the website favicon in each tab when available, with a fallback
+  icon when the website does not provide one.
+- Split Screen: display two websites inside one browser tab, in separate
+  page areas.
+
+Next, define the detailed Split Screen interaction and continue
+specifying the remaining interface controls. For each feature, define
+its exact user interface, behavior, settings, edge cases, and acceptance
+tests before implementation.
 
 Do not begin implementation until the detailed feature and interface
 specification has been reviewed and agreed with the user.
