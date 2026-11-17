@@ -28,6 +28,9 @@ class BrowserWindowDelegate : public CefWindowDelegate {
   }
 
   bool CanClose(CefRefPtr<CefWindow> window) override {
+    if (!browser_view_) {
+      return true;
+    }
     CefRefPtr<CefBrowser> browser = browser_view_->GetBrowser();
     return !browser || browser->GetHost()->TryCloseBrowser();
   }
