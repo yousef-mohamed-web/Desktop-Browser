@@ -1,0 +1,162 @@
+name: Desktop Browser - Windows Runtime Visual Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful CEF host build run ID"
+        required: true
+        default: "44163254949"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: desktop-browser-runtime-smoke-test
+  cancel-in-progress: false
+
+jobs:
+  runtime-smoke-test:
+    name: Run browser and capture staged screenshots (Windows x64)
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out project
+        uses: actions/checkout@v4
+
+      - name: Download the successful browser build artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $sourceRunId = "${{ inputs.source_run_id }}"
+          if ($sourceRunId -notmatch '^\d+$') { throw "source_run_id must be numeric." }
+
+          $artifactDir = Join-Path $env:RUNNER_TEMP "DesktopBrowserArtifact"
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          gh run download $sourceRunId --repo "${{ github.repository }}" --name "desktop-browser-cef-host-x64" --dir $artifactDir
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the browser build artifact from run $sourceRunId." }
+
+          $exe = Join-Path $artifactDir "DesktopBrowser.exe"
+          $dll = Join-Path $artifactDir "DesktopBrowser.dll"
+          $cef = Join-Path $artifactDir "libcef.dll"
+          foreach ($file in @($exe, $dll, $cef)) {
+            if (-not (Test-Path $file)) { throw "Required browser file is missing: $file" }
+          }
+
+          "BROWSER_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Downloaded browser artifact from run $sourceRunId."
+
+      - name: Prepare screenshot capture helper
+        shell: pwsh
+        run: |
+          $helper = @'
+          using System;
+          using System.Drawing;
+          using System.Drawing.Imaging;
+          using System.Runtime.InteropServices;
+
+          public static class WindowCapture {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern IntPtr FindWindow(string className, string windowName);
+
+            [DllImport("user32.dll")]
+            public static extern bool IsWindow(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint flags);
+
+            [DllImport("user32.dll")]
+            public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+            public static void Save(IntPtr hwnd, string path) {
+              RECT r;
+              if (!GetWindowRect(hwnd, out r)) throw new Exception("GetWindowRect failed.");
+              int width = r.Right - r.Left;
+              int height = r.Bottom - r.Top;
+              if (width < 200 || height < 150) throw new Exception("Browser window dimensions are invalid.");
+              using (Bitmap bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb))
+              using (Graphics g = Graphics.FromImage(bmp)) {
+                IntPtr hdc = g.GetHdc();
+                bool ok;
+                try { ok = PrintWindow(hwnd, hdc, 2); }
+                finally { g.ReleaseHdc(hdc); }
+                if (!ok) throw new Exception("PrintWindow could not capture the browser window.");
+                bmp.Save(path, ImageFormat.Png);
+              }
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $helper -ReferencedAssemblies System.Drawing
+
+          $screenshots = Join-Path $env:RUNNER_TEMP "DesktopBrowserScreenshots"
+          New-Item -ItemType Directory -Force -Path $screenshots | Out-Null
+          "SCREENSHOT_DIR=$screenshots" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Launch browser, capture startup and loaded-page screenshots
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = Join-Path $env:BROWSER_DIR "DesktopBrowser.exe"
+          $results = @()
+          $cases = @(
+            @{ Name = "example"; Url = "https://example.com/"; Initial = "01-example-window-created.png"; Loaded = "02-example-after-wait.png" },
+            @{ Name = "wikipedia"; Url = "https://www.wikipedia.org/"; Initial = "03-wikipedia-window-created.png"; Loaded = "04-wikipedia-after-wait.png" }
+          )
+
+          foreach ($case in $cases) {
+            Write-Host "Starting browser test for $($case.Url)"
+            $proc = Start-Process -FilePath $exe -ArgumentList @("--url=$($case.Url)") -WorkingDirectory $env:BROWSER_DIR -PassThru
+            $hwnd = [IntPtr]::Zero
+
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 1
+              $hwnd = [WindowCapture]::FindWindow($null, "Desktop Browser - CEF Host")
+              if ($hwnd -ne [IntPtr]::Zero -and [WindowCapture]::IsWindow($hwnd)) { break }
+              if ($proc.HasExited) { throw "Browser exited before creating its window for $($case.Url). Exit code: $($proc.ExitCode)" }
+            }
+
+            if ($hwnd -eq [IntPtr]::Zero) { throw "Browser window was not created for $($case.Url)." }
+
+            [WindowCapture]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Seconds 2
+            [WindowCapture]::Save($hwnd, (Join-Path $env.SCREENSHOT_DIR $case.Initial))
+            Write-Host "Captured startup screenshot: $($case.Initial)"
+
+            Start-Sleep -Seconds 18
+            if ($proc.HasExited) { throw "Browser exited while waiting for page rendering at $($case.Url)." }
+            [WindowCapture]::Save($hwnd, (Join-Path $env.SCREENSHOT_DIR $case.Loaded))
+            Write-Host "Captured post-load-wait screenshot: $($case.Loaded)"
+
+            $results += "$($case.Url) : process alive; window captured twice"
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "DesktopBrowser.exe" } |
+              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+          }
+
+          $results | Set-Content (Join-Path $env.SCREENSHOT_DIR "SMOKE_TEST_RESULTS.txt")
+          $images = Get-ChildItem $env.SCREENSHOT_DIR -Filter "*.png"
+          if ($images.Count -ne 4) { throw "Expected 4 screenshots, found $($images.Count)." }
+          foreach ($image in $images) {
+            if ($image.Length -lt 10000) { throw "Screenshot appears unexpectedly small: $($image.Name)" }
+            Write-Host "$($image.Name) - $($image.Length) bytes"
+          }
+
+      - name: Upload screenshots and runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-browser-runtime-test-evidence
+          path: ${{ runner.temp }}/DesktopBrowserScreenshots/
+          if-no-files-found: warn
+          retention-days: 14
