@@ -13,8 +13,10 @@ class SimpleHandler : public CefClient, public CefLifeSpanHandler {
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override;
 
+  CefRefPtr<CefBrowser> GetBrowser() const;
+
  private:
-  int browser_count_ = 0;
+  CefRefPtr<CefBrowser> browser_;
 
   IMPLEMENT_REFCOUNTING(SimpleHandler);
   DISALLOW_COPY_AND_ASSIGN(SimpleHandler);
