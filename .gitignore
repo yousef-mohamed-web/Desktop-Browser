@@ -1,0 +1,26 @@
+# Build output
+/build/
+/out/
+/cmake-build-*/
+/Release/
+/Debug/
+/x64/
+/Win32/
+
+# CEF binary distributions and downloaded archives
+/third_party/cef/
+/cef_binary_*/
+/*.tar.bz2
+/*.zip
+
+# IDE and user-local files
+.vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# Logs and temporary files
+*.log
+*.tmp
