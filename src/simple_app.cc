@@ -126,7 +126,10 @@ void SimpleApp::OnContextInitialized() {
   GetClientRect(window, &client_rect);
 
   CefWindowInfo window_info;
-  window_info.SetAsChild(window, client_rect);
+  window_info.SetAsChild(
+      window,
+      CefRect(0, 0, client_rect.right - client_rect.left,
+              client_rect.bottom - client_rect.top));
 
   // Alloy runtime style is intentional here: the project owns the native
   // Win32 top-level window and will add its own browser controls in later
