@@ -410,3 +410,10 @@ All items in this section are approved requirements for the planned first releas
 - Provide Pause, Resume, Cancel, and Retry controls for the overall file download; the user controls the complete download as one operation.
 - The agreed visual reference is the ADM-style presentation shown in the conversation: one file item with its overall progress and visible internal segment progress in the same item. Do not replace this with a separate list of chunk downloads or a different presentation without the user's approval.
 
+
+## Startup Behavior — Approved Decision (2026-11-17)
+
+- When the browser starts, open the configured Home Page only.
+- Do not automatically restore the tabs or windows that were open when the browser was last closed.
+- This is the user's explicit startup preference and supersedes any earlier generic wording that implied automatic session restoration at startup.
+- This decision changes the automatic startup behavior only. It does not authorize removing other approved tab-management or session-related capabilities. Any separate manual session-recovery behavior, including how saved sessions may be accessed, remains to be specified; do not assume it is removed or automatically enabled.
