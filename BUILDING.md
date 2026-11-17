@@ -2,11 +2,11 @@
 
 ## Current implementation stage
 
-The first CI milestone is a **CEF integration baseline**, not the finished browser UI.
+The first CI milestone was a **CEF integration baseline**. It successfully built the official CEF `cefsimple` sample for Windows x64 using the pinned CEF distribution.
 
-GitHub Actions downloads the official CEF Windows x64 standard binary distribution, verifies its SHA-1 checksum against the official sidecar file, and builds the upstream `cefsimple` sample with Visual Studio 2022 / CMake for x64.
+The second milestone introduces the project's own CEF host source code. The phase-two workflow replaces the upstream sample's entry/application/handler source files inside the temporary CEF build tree, then builds the official CEF target with the Windows sandbox and CEF Chrome Bootstrap enabled. The upstream CEF source tree is modified only inside the disposable GitHub Actions runner; no third-party CEF source is committed to this repository.
 
-This validates the selected CEF distribution and the Windows build pipeline before project-specific browser code is introduced. The sample is intentionally not presented as the completed Desktop Browser.
+This is an integration prototype, not the finished browser interface. It currently creates one CEF browser window using CEF's default Chrome runtime style and opens Google as the initial page. The custom Win32 browser shell, tabs, address bar, downloads manager, Split Screen, and the other approved features remain subsequent implementation work; none are cancelled.
 
 ## Pinned CEF baseline
 
@@ -16,25 +16,42 @@ This validates the selected CEF distribution and the Windows build pipeline befo
 - Build toolchain: Visual Studio 2022, CMake, x64
 - CI runner: GitHub Actions `windows-2022`
 
-CEF release binaries are tied to Chromium releases. Keep this version pinned during the initial integration milestone. Engine upgrades must be reviewed and tested deliberately; they must never become an automatic end-user browser update.
+Keep this version pinned during initial integration. Engine upgrades must be reviewed and tested deliberately; end-user browser updates remain manual-only.
 
-## Run the build
+## Workflows
+
+### CEF baseline
+
+`.github/workflows/cef-baseline.yml` builds the upstream `cefsimple` sample. This validates the selected CEF package and Windows build toolchain.
+
+### Project CEF host
+
+`.github/workflows/cef-host.yml` builds the project's own host sources with:
+
+- Windows x64 / Release
+- CEF Chrome Bootstrap
+- Windows sandbox enabled (`USE_SANDBOX=ON`)
+- Chromium child-process dispatch through the same application entry point
+- One initial browser view and a controlled CEF message loop
+
+The output artifact is `desktop-browser-cef-host-x64`. It is a technical prototype for CI inspection, not a release installer.
+
+## Run the phase-two build
 
 1. Open the repository's **Actions** tab.
-2. Select **CEF Windows x64 Baseline**.
-3. Open the latest run for branch `build/cef-windows-x64-baseline`.
-4. When the job succeeds, download the `cef-windows-x64-baseline` artifact.
+2. Select **Desktop Browser - CEF Windows x64 Host**.
+3. Select branch `implementation/cef-win32-host`.
+4. Run the workflow and wait for all steps to finish.
+5. Inspect the `desktop-browser-cef-host-x64` artifact only after a successful run.
 
-The artifact contains the upstream `cefsimple` executable and its runtime files. It is a technical smoke-test artifact, not yet the branded browser application.
-
-## Next implementation milestone
-
-After the baseline succeeds, replace the upstream sample entry point with the project's own minimal Win32 + CEF host. Validate CEF initialization and shutdown, browser rendering, subprocess startup, sandbox behavior, and navigation before implementing the full browser shell.
+The workflow verifies the official CEF archive checksum before extraction and checks that the sandboxed bootstrap executable, application DLL, CEF runtime DLL, resources, and locales are staged.
 
 ## Important constraints
 
 - Windows 10 x64 is the target deployment platform.
-- The application itself is built as x64; Win32 refers to the Windows API, not a 32-bit executable.
-- Do not disable the Chromium sandbox or collapse Chromium into a single process to make CI pass.
+- Win32 refers to the Windows API; the executable is x64.
+- Do not disable the Chromium sandbox or use single-process mode to make CI pass.
 - Do not add CEF binary archives or generated build outputs to Git.
+- Do not remove or reduce any approved browser feature without the user's explicit approval.
+- Normal startup will eventually open the Home Page only; session restore remains user-initiated.
 - The end-user browser update policy remains manual-only as specified in `Technical_Specification.txt`.
