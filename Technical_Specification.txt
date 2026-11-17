@@ -358,3 +358,44 @@ All three activation methods are approved:
 
 These requirements are approved for the browser's planned first release. Do not omit or remove any item without the user's explicit approval.
 
+## Approved UI and Download Manager Decisions (2026-11-17)
+
+### A. Split Screen entry point — updated decision
+- The Split Screen command shall be placed inside the browser's Tools menu.
+- It shall not occupy a permanently visible position beside the address bar.
+- This decision updates and supersedes the earlier proposal for a permanently visible Split Screen toolbar button.
+- The other approved activation methods remain:
+  - A Split Screen option in the right-click context menu for a tab.
+  - Dragging a tab and dropping it into the opposite side of the Split Screen view.
+- Keep all previously approved Split Screen behavior: two independent page areas within one tab; independent address/search bars and navigation; selecting an already-open tab for the second side; draggable divider with freely adjustable ratios; a 50/50 reset; preserving the chosen ratio while navigating; and returning to a single-page view.
+
+### B. Download Manager — approved first-release requirements
+The Download Manager is a high-priority core feature. All requirements below are approved and must be included:
+
+1. Pause: allow the user to pause an active download.
+2. Resume: continue a paused download from the point already downloaded, rather than restarting from zero whenever the server and transfer method support resumption.
+3. Repeated Pause/Resume: allow the user to pause and resume the same download repeatedly without losing completed data, subject to server and protocol support.
+4. Cancel: allow the user to cancel a download.
+5. Retry: allow the user to retry a failed download.
+6. Progress information: show download percentage, current speed, estimated remaining time, downloaded amount, and total file size when available.
+7. Persistent download list: retain the download list across browser restarts.
+8. Resume after restart: allow supported downloads to resume after the browser is closed and reopened, preserving partial data when possible.
+9. Multiple downloads: support downloading multiple files concurrently and managing each download independently.
+
+### C. User-selectable download methods
+The browser shall support both download methods below, and the user shall choose which method to use:
+
+- **Chunked / multi-connection download:** split a file into multiple parts and download the parts concurrently, then assemble them into the completed file.
+- **Standard download:** download the file using a normal single transfer, with Pause/Resume where supported.
+
+The selected method shall be user-controlled; do not force one method for all downloads. The browser shall expose the choice clearly in the download UI or settings and allow the user to change it for a download.
+
+### D. Download compatibility and integrity requirements
+- Chunked downloading requires server support for byte-range requests (or another technically valid way to retrieve separate ranges). If unavailable, explain that limitation and use or offer standard downloading; never imply that parallel chunking is guaranteed for every server.
+- Pause/resume and resume-after-restart also depend on server support and stable resource identity/validators. Preserve partial data safely and verify that the remote file has not changed before appending resumed data.
+- Assemble downloaded chunks in the correct order and verify completion/integrity before marking the file complete.
+- Handle interrupted connections, failed chunks, retries, and cancellation without corrupting the final file.
+- Do not silently switch the user's chosen download method; if the chosen method is unsupported, notify the user and request or apply only a clearly disclosed fallback policy.
+
+All items in this section are approved requirements for the planned first release. Do not omit, silently downgrade, or remove any item without the user's explicit approval.
+
