@@ -176,7 +176,7 @@ jobs:
             "CEF=$($env:CEF_VERSION)"
             "Sandbox=Enabled (USE_SANDBOX=ON)"
             "Bootstrap=CEF Chrome Bootstrap"
-            "RuntimeStyle=CEF default Chrome style"
+            "RuntimeStyle=CEF Alloy child hosted inside the project Win32 window"
             "BuildConfiguration=Release"
             "Note=Integration prototype only; not the finished browser interface."
           ) | Set-Content -Path (Join-Path $stage "BUILD_INFO.txt") -Encoding UTF8
