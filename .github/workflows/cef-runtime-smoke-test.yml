@@ -605,6 +605,49 @@ jobs:
         timeout-minutes: 25
         run: |
           $ErrorActionPreference = "Stop"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class ZenWindowProbe {
+            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            public static IntPtr Find(uint pid) {
+              IntPtr found=IntPtr.Zero;
+              EnumWindows(delegate(IntPtr h,IntPtr s) {
+                uint owner; GetWindowThreadProcessId(h,out owner);
+                if(owner==pid && IsWindowVisible(h)){found=h;return false;} return true;
+              },IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          function Get-Tree([int]$RootPid) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.HashSet[int]]::new()
+            [void]$ids.Add($RootPid); $changed = $true
+            while ($changed) {
+              $changed = $false
+              foreach ($p in $all) {
+                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
+                  [void]$ids.Add([int]$p.ProcessId); $changed = $true
+                }
+              }
+            }
+            foreach ($p in $all) {
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($g) {
+                  [pscustomobject]@{
+                    Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
+                    Type=if($p.CommandLine -match '-contentproc'){'content'}else{'browser'}
+                    WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
+                  }
+                }
+              }
+            }
+          }
           $driver = Start-Process -FilePath (Get-Command geckodriver).Source -ArgumentList @("--host","127.0.0.1","--port","4444") -PassThru
           try {
             $driverReady = $false
@@ -641,7 +684,7 @@ jobs:
               if(-not $zenProc){throw "Zen process was not found after WebDriver launch."}
               $hwnd=[IntPtr]::Zero
               for($i=0;$i -lt 90;$i++){
-                $hwnd=[EdgeWindowProbe]::Find([uint32]$zenProc.ProcessId)
+                $hwnd=[ZenWindowProbe]::Find([uint32]$zenProc.ProcessId)
                 if($hwnd -ne [IntPtr]::Zero){break}
                 Start-Sleep -Milliseconds 500
               }
