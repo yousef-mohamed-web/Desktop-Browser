@@ -363,8 +363,19 @@ jobs:
             Start-Sleep -Seconds 2
           }
           $summary | Set-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
-          $screens = Get-ChildItem $evidence -Filter "*.bmp"
-          if ($screens.Count -ne 4) { throw "Expected four screenshots; found $($screens.Count)." }
+          # Each of the five CEF test sites must produce both startup and loaded screenshots.
+          $expectedScreenshotNames = @()
+          foreach ($site in @("example", "wikipedia", "chatgpt", "github", "claude")) {
+            $expectedScreenshotNames += "$site-startup.bmp"
+            $expectedScreenshotNames += "$site-loaded.bmp"
+          }
+          $screens = @(Get-ChildItem $evidence -Filter "*.bmp" -File)
+          $actualScreenshotNames = @($screens | ForEach-Object { $_.Name })
+          $missingScreenshots = @($expectedScreenshotNames | Where-Object { $_ -notin $actualScreenshotNames })
+          $unexpectedScreenshots = @($actualScreenshotNames | Where-Object { $_ -notin $expectedScreenshotNames })
+          if ($missingScreenshots.Count -gt 0 -or $unexpectedScreenshots.Count -gt 0 -or $screens.Count -ne $expectedScreenshotNames.Count) {
+            throw "Screenshot validation failed. Expected $($expectedScreenshotNames.Count) named screenshots; found $($screens.Count). Missing: $($missingScreenshots -join ', '). Unexpected: $($unexpectedScreenshots -join ', ')."
+          }
           foreach ($screen in $screens) {
             if ($screen.Length -lt 10000) { throw "Screenshot is unexpectedly small: $($screen.Name)" }
           }
