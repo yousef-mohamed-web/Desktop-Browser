@@ -55,3 +55,14 @@ The workflow verifies the official CEF archive checksum before extraction and ch
 - Do not remove or reduce any approved browser feature without the user's explicit approval.
 - Normal startup will eventually open the Home Page only; session restore remains user-initiated.
 - The end-user browser update policy remains manual-only as specified in `Technical_Specification.txt`.
+
+
+## Resource-management foundation (phase three)
+
+The project host now includes a UI-thread-owned `TabManager` registry for multiple CEF browser instances. The registry tracks browser identifiers, the active browser, and lifecycle callbacks without defining or changing the browser's tab UI.
+
+A read-only `ResourceMonitor` samples the host process working set/private bytes, system available physical memory, memory load, and host-process CPU usage every three seconds. When `DESKTOP_BROWSER_METRICS_FILE` is set, these samples are appended to that metrics file.
+
+`AdaptiveMemoryManager` currently classifies system memory pressure (normal/moderate/high/critical) only. It deliberately performs no tab suspension, discard, reload, process-priority change, or other disruptive action. The monitor currently measures the browser host process, not the aggregate CEF child-process tree; aggregate measurement remains part of the external performance harness.
+
+The CEF host workflow copies and compiles the new runtime components inside the disposable official CEF sample build. No CEF binaries or upstream CEF source are committed to this repository.

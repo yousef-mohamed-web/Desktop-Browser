@@ -2,6 +2,7 @@
 #ifndef DESKTOP_BROWSER_TAB_MANAGER_H_
 #define DESKTOP_BROWSER_TAB_MANAGER_H_
 
+#include <cstddef>
 #include <map>
 #include <vector>
 
@@ -18,7 +19,7 @@ class TabManager {
   CefRefPtr<CefBrowser> GetActiveBrowser() const;
   CefRefPtr<CefBrowser> GetBrowser(int browser_id) const;
   std::vector<CefRefPtr<CefBrowser>> GetBrowsers() const;
-  size_t GetCount() const;
+  std::size_t GetCount() const;
   bool IsEmpty() const;
 
  private:

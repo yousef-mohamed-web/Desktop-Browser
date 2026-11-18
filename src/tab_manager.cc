@@ -47,7 +47,7 @@ std::vector<CefRefPtr<CefBrowser>> TabManager::GetBrowsers() const {
   return result;
 }
 
-size_t TabManager::GetCount() const {
+std::size_t TabManager::GetCount() const {
   CEF_REQUIRE_UI_THREAD();
   return browsers_.size();
 }
