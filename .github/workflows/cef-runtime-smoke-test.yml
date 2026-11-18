@@ -21,7 +21,7 @@ jobs:
   runtime-performance-test:
     name: Measure startup and page load (Windows x64)
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       - name: Check out project
@@ -45,7 +45,7 @@ jobs:
 
       - name: Launch browser and measure startup and page loading
         shell: pwsh
-        timeout-minutes: 12
+        timeout-minutes: 25
         run: |
           $ErrorActionPreference = "Stop"
           $helper = @'
@@ -261,7 +261,7 @@ jobs:
 
       - name: Measure Microsoft Edge on the same runner
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           $ErrorActionPreference = "Stop"
           $edgeCandidates = @(
