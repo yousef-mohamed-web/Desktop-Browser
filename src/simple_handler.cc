@@ -96,9 +96,10 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     tab_titles_.erase(id);
     tab_manager_.Remove(id);
   }
-  SaveSession();
+  if (!closing_all_browsers_) SaveSession();
   NotifyShellChanged();
-  if (tab_manager_.IsEmpty()) CefQuitMessageLoop();
+  if (tab_manager_.IsEmpty() && main_window_ && IsWindow(main_window_))
+    PostMessageW(main_window_, WM_CLOSE, 0, 0);
 }
 void SimpleHandler::OnLoadStart(CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame, TransitionType transition_type) {
@@ -230,6 +231,8 @@ CefRefPtr<CefBrowser> SimpleHandler::GetBrowser(int id) const {
 }
 bool SimpleHandler::TryCloseAllBrowsers() {
   CEF_REQUIRE_UI_THREAD();
+  SaveSession();
+  closing_all_browsers_ = true;
   bool can_close = true;
   for (const auto& b : tab_manager_.GetBrowsers())
     if (b && !b->GetHost()->TryCloseBrowser()) can_close = false;
