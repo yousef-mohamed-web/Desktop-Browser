@@ -598,7 +598,7 @@ jobs:
             }
           }
           $chromeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
-          $chromeSummary | Set-Content (Join-Path $evidence "EDGE_PERFORMANCE_RESULTS.txt")
+          $chromeSummary | Set-Content (Join-Path $evidence "CHROME_PERFORMANCE_RESULTS.txt")
 
       - name: Measure Zen Browser on the same runner
         shell: pwsh
