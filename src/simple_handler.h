@@ -52,6 +52,7 @@ class SimpleHandler : public CefClient, public CefLifeSpanHandler,
   void RecordResourceSample();
   static std::vector<std::string> LoadSavedSession();
   void SaveSession() const;
+  void SetSessionRestoreCount(size_t count);
  private:
   void NotifyShellChanged();
   HWND main_window_ = nullptr;
@@ -60,6 +61,7 @@ class SimpleHandler : public CefClient, public CefLifeSpanHandler,
   AdaptiveMemoryManager adaptive_memory_manager_;
   std::map<int, std::chrono::steady_clock::time_point> load_start_by_browser_;
   std::map<int, std::wstring> tab_titles_;
+  size_t session_restore_pending_ = 0;
   IMPLEMENT_REFCOUNTING(SimpleHandler);
   DISALLOW_COPY_AND_ASSIGN(SimpleHandler);
 };
