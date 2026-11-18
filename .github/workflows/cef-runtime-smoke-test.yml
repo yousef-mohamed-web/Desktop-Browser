@@ -50,9 +50,11 @@ jobs:
           "BROWSER_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "Downloaded browser artifact from run $sourceRunId."
 
-      - name: Prepare screenshot capture helper
-        shell: powershell
+      - name: Launch browser, capture startup and loaded-page screenshots
+        shell: pwsh
+        timeout-minutes: 10
         run: |
+          $ErrorActionPreference = "Stop"
           $helper = @'
           using System;
           using System.Drawing;
@@ -104,11 +106,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $screenshots | Out-Null
           "SCREENSHOT_DIR=$screenshots" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Launch browser, capture startup and loaded-page screenshots
-        shell: pwsh
-        timeout-minutes: 10
-        run: |
-          $ErrorActionPreference = "Stop"
           $exe = Join-Path $env:BROWSER_DIR "DesktopBrowser.exe"
           $results = @()
           $cases = @(
