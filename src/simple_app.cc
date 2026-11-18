@@ -19,6 +19,7 @@ constexpr UINT_PTR kResourceMonitorTimerId = 1;
 constexpr UINT kResourceMonitorIntervalMs = 3000;
 constexpr UINT kShellChangedMessage = WM_APP + 41;
 constexpr UINT kAddressSubmitMessage = WM_APP + 42;
+constexpr UINT kTabReorderMessage = WM_APP + 43;
 constexpr int kTabStripHeight = 32;
 constexpr int kToolbarHeight = 40;
 constexpr int kContentTop = kTabStripHeight + kToolbarHeight;
@@ -31,6 +32,21 @@ enum ControlId {
 HWND g_address = nullptr;
 HWND g_tab_buttons[128] = {};
 int g_tab_button_count = 0;
+int g_tab_browser_ids[128] = {};
+WNDPROC g_tab_button_original_proc = nullptr;
+
+LRESULT CALLBACK TabButtonProc(HWND button, UINT message, WPARAM wparam, LPARAM lparam) {
+  const int index = static_cast<int>(GetWindowLongPtrW(button, GWLP_USERDATA));
+  if (message == WM_LBUTTONDOWN) SetCapture(button);
+  if (message == WM_MOUSEMOVE && (wparam & MK_LBUTTON) && index >= 0) {
+    POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    MapWindowPoints(button, GetParent(button), &point, 1);
+    const int target = (std::max)(0, (point.x - 4) / 182);
+    PostMessageW(GetParent(button), kTabReorderMessage, index, target);
+  }
+  if (message == WM_LBUTTONUP && GetCapture() == button) ReleaseCapture();
+  return CallWindowProcW(g_tab_button_original_proc, button, message, wparam, lparam);
+}
 HFONT g_ui_font = nullptr;
 WNDPROC g_original_address_proc = nullptr;
 
@@ -223,7 +239,10 @@ void LayoutControls(HWND window, SimpleHandler* handler) {
           tab_x, 1, 180, 29, window,
           reinterpret_cast<HMENU>(static_cast<INT_PTR>(5000 + g_tab_button_count)),
           GetModuleHandleW(nullptr), nullptr);
-      SetWindowLongPtrW(button, GWLP_USERDATA, static_cast<LONG_PTR>(browser_id));
+      g_tab_browser_ids[g_tab_button_count] = browser_id;
+      SetWindowLongPtrW(button, GWLP_USERDATA, static_cast<LONG_PTR>(g_tab_button_count));
+      if (!g_tab_button_original_proc) g_tab_button_original_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(button, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(TabButtonProc)));
+      else SetWindowLongPtrW(button, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(TabButtonProc));
       SetControlFont(button);
       g_tab_buttons[g_tab_button_count++] = button;
       tab_x += 182;
@@ -263,6 +282,10 @@ LRESULT CALLBACK BrowserWindowProc(HWND window, UINT message,
       SubmitAddress(window, handler);
       return 0;
 
+    case kTabReorderMessage:
+      if (handler) handler->MoveTab(static_cast<int>(wparam), static_cast<int>(lparam));
+      return 0;
+
     case WM_SIZE:
       LayoutControls(window, handler);
       return 0;
@@ -289,8 +312,8 @@ LRESULT CALLBACK BrowserWindowProc(HWND window, UINT message,
           return 0;
         default:
           if (lparam && id >= 5000 && id < 5128) {
-            const int browser_id = static_cast<int>(GetWindowLongPtrW(
-                reinterpret_cast<HWND>(lparam), GWLP_USERDATA));
+            const int index = id - 5000;
+            const int browser_id = index >= 0 && index < g_tab_button_count ? g_tab_browser_ids[index] : -1;
             handler->SetActiveBrowser(browser_id);
             return 0;
           }
