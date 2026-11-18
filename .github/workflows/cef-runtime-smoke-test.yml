@@ -6,7 +6,7 @@ on:
       source_run_id:
         description: "Successful CEF host build run ID containing the timing instrumentation"
         required: true
-        default: "44163254949"
+        default: ""
         type: string
 
 permissions:
