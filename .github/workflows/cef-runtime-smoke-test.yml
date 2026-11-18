@@ -276,6 +276,12 @@ jobs:
               Start-Sleep -Milliseconds 500
             }
             if (-not $pageMetric) { throw "No CEF main-frame load timing was reported within 60 seconds for $($case.Url)." }
+            # Fail closed if the app silently displayed its home page or any URL
+            # other than the exact site under test. A named screenshot alone is
+            # not evidence that the requested destination actually loaded.
+            if ($pageMetric -notlike "*url=$($case.Url)*") {
+              throw "CEF navigated to an unexpected URL for $($case.Name). Expected '$($case.Url)'; metric was '$pageMetric'."
+            }
             [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-loaded.bmp"))
 
             # Allow short-lived post-load renderer/GPU allocations to settle, then sample the full process tree.
