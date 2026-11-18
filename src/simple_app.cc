@@ -16,6 +16,8 @@
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"DesktopBrowserCEFHostWindow";
+constexpr UINT_PTR kResourceMonitorTimerId = 1;
+constexpr UINT kResourceMonitorIntervalMs = 3000;
 
 SimpleHandler* GetWindowHandler(HWND window) {
   return reinterpret_cast<SimpleHandler*>(
@@ -52,18 +54,24 @@ LRESULT CALLBACK BrowserWindowProc(HWND window,
       return 0;
     }
 
+    case WM_TIMER: {
+      if (wparam == kResourceMonitorTimerId && handler) {
+        handler->RecordResourceSample();
+        return 0;
+      }
+      break;
+    }
+
     case WM_CLOSE: {
-      if (handler) {
-        CefRefPtr<CefBrowser> browser = handler->GetBrowser();
-        if (browser && !browser->GetHost()->TryCloseBrowser()) {
-          return 0;
-        }
+      if (handler && !handler->TryCloseAllBrowsers()) {
+        return 0;
       }
       DestroyWindow(window);
       return 0;
     }
 
     case WM_DESTROY:
+      KillTimer(window, kResourceMonitorTimerId);
       return 0;
   }
 
@@ -119,6 +127,8 @@ void SimpleApp::OnContextInitialized() {
     return;
   }
 
+  SetTimer(window, kResourceMonitorTimerId, kResourceMonitorIntervalMs,
+           nullptr);
   ShowWindow(window, SW_SHOWNORMAL);
   UpdateWindow(window);
 

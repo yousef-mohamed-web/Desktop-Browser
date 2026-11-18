@@ -105,6 +105,12 @@ jobs:
             "src/simple_handler.h" = "simple_handler.h"
             "src/simple_handler.cc" = "simple_handler.cc"
             "src/simple_handler_win.cc" = "simple_handler_win.cc"
+            "src/tab_manager.h" = "tab_manager.h"
+            "src/tab_manager.cc" = "tab_manager.cc"
+            "src/resource_monitor.h" = "resource_monitor.h"
+            "src/resource_monitor.cc" = "resource_monitor.cc"
+            "src/adaptive_memory_manager.h" = "adaptive_memory_manager.h"
+            "src/adaptive_memory_manager.cc" = "adaptive_memory_manager.cc"
           }
 
           foreach ($source in $mapping.Keys) {
@@ -115,7 +121,15 @@ jobs:
             Copy-Item -Path $sourcePath -Destination (Join-Path $env:CEF_SAMPLE_ROOT $mapping[$source]) -Force
           }
 
-          Write-Host "The official CEF target will now compile the project's own host sources."
+          # The upstream sample owns the target definition. Add the project's
+          # runtime components to that disposable CEF build target.
+          $sampleCmake = Join-Path $env:CEF_SAMPLE_ROOT "CMakeLists.txt"
+          if (-not (Test-Path $sampleCmake)) {
+            throw "The official CEF sample CMakeLists.txt is missing."
+          }
+          Add-Content -Path $sampleCmake -Value "`ntarget_sources(cefsimple PRIVATE tab_manager.cc resource_monitor.cc adaptive_memory_manager.cc)`n"
+
+          Write-Host "The official CEF target will compile the project host and resource-management sources."
 
       - name: Configure CEF with the Windows sandbox and Chrome Bootstrap
         shell: pwsh
