@@ -1,6 +1,9 @@
 name: Desktop Browser - CEF Windows x64 Host
 
 on:
+  push:
+    branches:
+      - implementation/cef-win32-host
   workflow_dispatch:
 
 permissions:

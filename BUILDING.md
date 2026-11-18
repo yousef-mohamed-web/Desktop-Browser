@@ -66,3 +66,16 @@ A read-only `ResourceMonitor` samples the host process working set/private bytes
 `AdaptiveMemoryManager` currently classifies system memory pressure (normal/moderate/high/critical) only. It deliberately performs no tab suspension, discard, reload, process-priority change, or other disruptive action. The monitor currently measures the browser host process, not the aggregate CEF child-process tree; aggregate measurement remains part of the external performance harness.
 
 The CEF host workflow copies and compiles the new runtime components inside the disposable official CEF sample build. No CEF binaries or upstream CEF source are committed to this repository.
+
+
+## Browser shell implementation status
+
+The native Win32 shell now provides the first navigation and tab-management slice:
+- Built-in lightweight Home Page with a search field and common website shortcuts.
+- Address/search entry, Back, Forward, Reload, Stop, and Home actions.
+- Multiple CEF browser instances represented as rectangular tabs, with title updates and tab switching.
+- New-tab and close-tab actions; closing the last tab returns to the Home Page.
+- Ctrl+L, Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+Tab, and F5 shortcuts.
+- Hidden browser views receive the supported WasHidden notification; this is visibility scheduling, not destructive tab suspension.
+
+This is an implementation stage, not a claim that the first-release browser is complete. Downloads, bookmarks, history, settings, favicon retrieval, window management, split screen, privacy/profile isolation, and the remaining requirements in Technical_Specification.txt remain required follow-on work. The visible placeholder entries are not implemented feature functionality.
