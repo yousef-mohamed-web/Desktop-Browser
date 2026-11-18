@@ -747,29 +747,7 @@ jobs:
             Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
           }
 
-s|Measure-Object Private -Maximum).Maximum)/1MB,1)
-              $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
-              $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
-              $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
-              $edgeSummary += ""; $edgeSummary += "URL: $($case.Url)"
-              $edgeSummary += "Startup to visible window: $startupMs ms"
-              $edgeSummary += "Edge Navigation Timing load event: $loadMs ms"
-              $edgeSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
-              $edgeSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
-              $edgeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
-              $edgeSummary += "Browser process count (max across samples): $maxCount"
-              $edgeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
-              foreach($r in $lastRows){$edgeSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
-              Write-Host "Edge $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
-            } finally {
-              $socket.Dispose()
-              Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "msedge.exe" -and $_.CommandLine -like "*$profile*" } |
-                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-              Start-Sleep -Seconds 2
-            }
-          }
-          $edgeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
-          $edgeSummary | Set-Content (Join-Path $evidence "EDGE_PERFORMANCE_RESULTS.txt")
+
 
       - name: Upload performance results, screenshots and CEF metrics
         if: always()
