@@ -378,5 +378,13 @@ void SimpleApp::OnContextInitialized() {
   SetTimer(window, kResourceMonitorTimerId, kResourceMonitorIntervalMs, nullptr);
   ShowWindow(window, SW_SHOWNORMAL);
   UpdateWindow(window);
-  handler_->CreateBrowserTab(BuiltInHomePage());
+  // Honor an explicit startup URL (used by automated runtime tests and
+  // useful for command-line launching). Fall back to the built-in home page.
+  CefRefPtr<CefCommandLine> command_line =
+      CefCommandLine::GetGlobalCommandLine();
+  const CefString startup_url =
+      command_line ? command_line->GetSwitchValue("url") : CefString();
+  const std::string initial_url =
+      startup_url.empty() ? BuiltInHomePage() : startup_url.ToString();
+  handler_->CreateBrowserTab(initial_url);
 }
