@@ -62,6 +62,7 @@ class SimpleHandler : public CefClient, public CefLifeSpanHandler,
   std::map<int, std::chrono::steady_clock::time_point> load_start_by_browser_;
   std::map<int, std::wstring> tab_titles_;
   size_t session_restore_pending_ = 0;
+  bool closing_all_browsers_ = false;
   IMPLEMENT_REFCOUNTING(SimpleHandler);
   DISALLOW_COPY_AND_ASSIGN(SimpleHandler);
 };
