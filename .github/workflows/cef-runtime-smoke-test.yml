@@ -133,8 +133,41 @@ jobs:
             "Desktop Browser runtime performance test",
             "Runner: Windows Server 2022 x64 (GitHub-hosted; not a low-end PC benchmark)",
             "Startup metric: process launch to first visible top-level window owned by the browser process.",
-            "Page-load metric: CEF main-frame OnLoadStart to OnLoadEnd callback."
+            "Page-load metric: CEF main-frame OnLoadStart to OnLoadEnd callback.",
+            "Memory metrics: browser process tree (main + all descendant CEF/Chromium processes), renderer-only subtotal, working set and private bytes.",
+            "Memory sampling: five 1-second samples after page load; report average and peak. This is whole-app memory, not a tab-only estimate."
           )
+          function Get-BrowserProcessTree([int]$RootPid) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.HashSet[int]]::new()
+            [void]$ids.Add($RootPid)
+            $changed = $true
+            while ($changed) {
+              $changed = $false
+              foreach ($p in $all) {
+                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
+                  [void]$ids.Add([int]$p.ProcessId)
+                  $changed = $true
+                }
+              }
+            }
+            $rows = foreach ($p in $all) {
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($g) {
+                  [pscustomobject]@{
+                    Pid = [int]$p.ProcessId
+                    ParentPid = [int]$p.ParentProcessId
+                    Type = if ($p.CommandLine -match '--type=([^\s"]+)') { $Matches[1] } else { 'browser' }
+                    WorkingSetBytes = [int64]$g.WorkingSet64
+                    PrivateBytes = [int64]$g.PrivateMemorySize64
+                  }
+                }
+              }
+            }
+            return @($rows)
+          }
+
           foreach ($case in $cases) {
             Write-Host "Testing $($case.Url)"
             $metricsFile = Join-Path $evidence "$($case.Name)-cef-metrics.txt"
@@ -168,15 +201,46 @@ jobs:
             if (-not $pageMetric) { throw "No CEF main-frame load timing was reported within 60 seconds for $($case.Url)." }
             [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-loaded.bmp"))
 
-            $proc.Refresh()
-            $memoryMb = [math]::Round($proc.WorkingSet64 / 1MB,1)
+            # Allow short-lived post-load renderer/GPU allocations to settle, then sample the full process tree.
+            Start-Sleep -Seconds 3
+            $samples = @()
+            $processRows = @()
+            for ($sample=0; $sample -lt 5; $sample++) {
+              $rows = @(Get-BrowserProcessTree -RootPid $proc.Id)
+              if ($rows.Count -gt 0) {
+                $processRows = $rows
+                $samples += [pscustomobject]@{
+                  WorkingSet = [int64](($rows | Measure-Object WorkingSetBytes -Sum).Sum)
+                  PrivateBytes = [int64](($rows | Measure-Object PrivateBytes -Sum).Sum)
+                  RendererWorkingSet = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object WorkingSetBytes -Sum).Sum)
+                  RendererPrivateBytes = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object PrivateBytes -Sum).Sum)
+                  ProcessCount = $rows.Count
+                }
+              }
+              Start-Sleep -Seconds 1
+            }
+            if ($samples.Count -eq 0) { throw "Could not collect browser process-tree memory metrics." }
+            $avgWs = [math]::Round((($samples | Measure-Object WorkingSet -Average).Average) / 1MB,1)
+            $peakWs = [math]::Round((($samples | Measure-Object WorkingSet -Maximum).Maximum) / 1MB,1)
+            $avgPrivate = [math]::Round((($samples | Measure-Object PrivateBytes -Average).Average) / 1MB,1)
+            $peakPrivate = [math]::Round((($samples | Measure-Object PrivateBytes -Maximum).Maximum) / 1MB,1)
+            $avgRendererWs = [math]::Round((($samples | Measure-Object RendererWorkingSet -Average).Average) / 1MB,1)
+            $avgRendererPrivate = [math]::Round((($samples | Measure-Object RendererPrivateBytes -Average).Average) / 1MB,1)
+            $processCount = [int](($samples | Measure-Object ProcessCount -Maximum).Maximum)
             $summary += ""
             $summary += "URL: $($case.Url)"
             $summary += "Startup to visible window: $startupMs ms"
             $summary += "CEF page load: $pageMetric"
-            $summary += "Browser main-process working set after load: $memoryMb MB"
+            $summary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
+            $summary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+            $summary += "Renderer-only memory: working_set_avg=$avgRendererWs MB; private_bytes_avg=$avgRendererPrivate MB"
+            $summary += "Browser process count: $processCount"
             $summary += "Browser main PID: $($proc.Id)"
-            Write-Host "$($case.Name): startup=$startupMs ms; $pageMetric; working_set=$memoryMb MB"
+            $summary += "Process breakdown (PID | parent PID | type | working set MB | private MB):"
+            foreach ($r in $processRows) {
+              $summary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WorkingSetBytes/1MB,1)) | $([math]::Round($r.PrivateBytes/1MB,1))"
+            }
+            Write-Host "$($case.Name): startup=$startupMs ms; $pageMetric; process_tree_ws_avg=$avgWs MB peak=$peakWs MB; private_avg=$avgPrivate MB; renderers_ws_avg=$avgRendererWs MB; processes=$processCount"
 
             Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "DesktopBrowser.exe" } |
               ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
