@@ -50,6 +50,8 @@ class SimpleHandler : public CefClient, public CefLifeSpanHandler,
   std::vector<int> GetTabIds() const;
   std::wstring GetTabTitle(int browser_id) const;
   void RecordResourceSample();
+  static std::vector<std::string> LoadSavedSession();
+  void SaveSession() const;
  private:
   void NotifyShellChanged();
   HWND main_window_ = nullptr;
