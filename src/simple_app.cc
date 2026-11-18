@@ -331,7 +331,6 @@ LRESULT CALLBACK BrowserWindowProc(HWND window, UINT message,
 
     case WM_DESTROY:
       KillTimer(window, kResourceMonitorTimerId);
-      PostQuitMessage(0);
       return 0;
   }
   return DefWindowProcW(window, message, wparam, lparam);
