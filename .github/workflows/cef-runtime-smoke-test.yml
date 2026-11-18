@@ -127,13 +127,18 @@ jobs:
           $exe = Join-Path $env:BROWSER_DIR "DesktopBrowser.exe"
           $cases = @(
             @{ Name="example"; Url="https://example.com/" },
-            @{ Name="wikipedia"; Url="https://www.wikipedia.org/" }
+            @{ Name="wikipedia"; Url="https://www.wikipedia.org/" },
+            @{ Name="chatgpt"; Url="https://chatgpt.com/" },
+            @{ Name="github"; Url="https://github.com/" },
+            @{ Name="claude"; Url="https://claude.com/" }
           )
           $summary = @(
             "Desktop Browser runtime performance test",
             "Runner: Windows Server 2022 x64 (GitHub-hosted; not a low-end PC benchmark)",
             "Startup metric: process launch to first visible top-level window owned by the browser process.",
             "Page-load metric: CEF main-frame OnLoadStart to OnLoadEnd callback.",
+            "Sites: example.com (baseline), wikipedia.org (existing reference), chatgpt.com, github.com, claude.com.",
+            "Dynamic services are tested logged out; login, bot checks, consent prompts, or network challenges may affect results. These are page-load tests, not authenticated app-task tests.",
             "Memory metrics: browser process tree (main + all descendant CEF/Chromium processes), renderer-only subtotal, working set and private bytes.",
             "Memory sampling: five 1-second samples after page load; report average and peak. This is whole-app memory, not a tab-only estimate."
           )
@@ -190,7 +195,7 @@ jobs:
             [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-startup.bmp"))
 
             $pageMetric = $null
-            for ($i=0; $i -lt 120; $i++) {
+            for ($i=0; $i -lt 240; $i++) {
               if (Test-Path $metricsFile) {
                 $pageMetric = Get-Content $metricsFile | Where-Object { $_ -match '^page_load_ms=' } | Select-Object -Last 1
                 if ($pageMetric) { break }
@@ -248,7 +253,7 @@ jobs:
           }
           $summary | Set-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
           $screens = Get-ChildItem $evidence -Filter "*.bmp"
-          if ($screens.Count -ne 4) { throw "Expected four screenshots; found $($screens.Count)." }
+          if ($screens.Count -ne 10) { throw "Expected ten screenshots (startup + loaded for five sites); found $($screens.Count)." }
           foreach ($screen in $screens) {
             if ($screen.Length -lt 10000) { throw "Screenshot is unexpectedly small: $($screen.Name)" }
           }
@@ -349,7 +354,10 @@ jobs:
           $caseIndex=0
           foreach($case in @(
             @{Name="example";Url="https://example.com/"},
-            @{Name="wikipedia";Url="https://www.wikipedia.org/"}
+            @{Name="wikipedia";Url="https://www.wikipedia.org/"},
+            @{Name="chatgpt";Url="https://chatgpt.com/"},
+            @{Name="github";Url="https://github.com/"},
+            @{Name="claude";Url="https://claude.com/"}
           )){
             $caseIndex++; $profile=Join-Path $env:RUNNER_TEMP "EdgeProfile-$caseIndex"; $port=9220+$caseIndex
             $clock=[System.Diagnostics.Stopwatch]::StartNew()
@@ -368,7 +376,7 @@ jobs:
             $socket.ConnectAsync([Uri]$target.webSocketDebuggerUrl,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
             try {
               $ready=$false; $loadMs=$null
-              for($i=0;$i -lt 120;$i++){
+              for($i=0;$i -lt 240;$i++){
                 $response=Invoke-CdpEvaluate $socket 1 "(()=>{const n=performance.getEntriesByType('navigation')[0];return {state:document.readyState,loadMs:n&&n.loadEventEnd>0?n.loadEventEnd-n.startTime:null}})()"
                 $value=$response.result.result.value
                 if($value.state -eq "complete" -and $null -ne $value.loadMs -and [double]$value.loadMs -gt 0){$ready=$true;$loadMs=[math]::Round([double]$value.loadMs,1);break}
