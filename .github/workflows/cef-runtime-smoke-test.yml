@@ -45,49 +45,116 @@ jobs:
 
       - name: Install Google Chrome, Zen Browser and GeckoDriver independently
         shell: pwsh
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
           $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
           $evidence = Join-Path $env:RUNNER_TEMP "DesktopBrowserPerformanceEvidence"
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           "EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
           $status = @("THIRD-PARTY BROWSER INSTALLATION STATUS")
-          $chromeAvailable = $false; $zenAvailable = $false; $geckoAvailable = $false
+          $chromeAvailable = $false
+          $zenAvailable = $false
+          $geckoAvailable = $false
+
+          # Google Chrome: official Google enterprise MSI, authenticated by its code-signing certificate.
           try {
             $msi = Join-Path $env:RUNNER_TEMP "GoogleChromeEnterprise64.msi"
             Invoke-WebRequest -Uri "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi" -OutFile $msi -MaximumRedirection 5
             $signature = Get-AuthenticodeSignature -FilePath $msi
-            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Google") { throw "Chrome MSI lacks a valid Google Authenticode signature." }
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Google") {
+              throw "Chrome MSI lacks a valid Google Authenticode signature."
+            }
             $install = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $msi, "/qn", "/norestart") -Wait -PassThru
-            if ($install.ExitCode -notin @(0,3010)) { throw "Chrome MSI installer returned exit code $($install.ExitCode)." }
+            if ($install.ExitCode -notin @(0, 3010)) { throw "Chrome MSI installer returned exit code $($install.ExitCode)." }
             $chromeCandidates = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
             $chromeExe = $chromeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
             if (-not $chromeExe) { throw "Google Chrome executable was not found after installation." }
-            $chromeAvailable = $true; $status += "Google Chrome: INSTALLED ($chromeExe)"
+            $chromeAvailable = $true
+            $status += "Google Chrome: INSTALLED ($chromeExe)"
             "CHROME_EXE=$chromeExe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } catch { Write-Warning "Google Chrome unavailable: $($_.Exception.Message)"; $status += "Google Chrome: FAILED - $($_.Exception.Message)" }
+          } catch {
+            Write-Warning "Google Chrome unavailable: $($_.Exception.Message)"
+            $status += "Google Chrome: FAILED - $($_.Exception.Message)"
+          }
+
+          # Zen Browser: pinned official GitHub release; verify its published SHA-256 before silent installation.
           try {
-            choco install zen-browser -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw "Chocolatey returned exit code $LASTEXITCODE." }
-            $zenCandidates = @("$env:ProgramFiles\Zen Browser\zen.exe", "${env:ProgramFiles(x86)}\Zen Browser\zen.exe", "$env:LOCALAPPDATA\Programs\Zen Browser\zen.exe", "$env:LOCALAPPDATA\Zen Browser\zen.exe")
+            $zenVersion = "1.24.2b"
+            $zenUrl = "https://github.com/zen-browser/desktop/releases/download/$zenVersion/zen.installer.exe"
+            $zenInstaller = Join-Path $env:RUNNER_TEMP "zen.installer.exe"
+            $zenExpectedSha256 = "bd53e63028b84fd77a4c734873d485d98b59921f4a6a6617cb654b2f9f1585bc"
+            Invoke-WebRequest -Uri $zenUrl -OutFile $zenInstaller -MaximumRedirection 5
+            $zenActualSha256 = (Get-FileHash -Path $zenInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($zenActualSha256 -ne $zenExpectedSha256) {
+              throw "Zen installer SHA-256 mismatch. Expected $zenExpectedSha256; got $zenActualSha256."
+            }
+            $zenInstall = Start-Process -FilePath $zenInstaller -ArgumentList @("/S", "/PreventRebootRequired=true") -Wait -PassThru
+            if ($zenInstall.ExitCode -ne 0) { throw "Zen installer returned exit code $($zenInstall.ExitCode)." }
+            $zenCandidates = @(
+              "$env:ProgramFiles\Zen Browser\zen.exe",
+              "$env:ProgramFiles\Zen\zen.exe",
+              "${env:ProgramFiles(x86)}\Zen Browser\zen.exe",
+              "$env:LOCALAPPDATA\Programs\Zen Browser\zen.exe",
+              "$env:LOCALAPPDATA\Zen Browser\zen.exe"
+            )
             $zenExe = $zenCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $zenExe) { $zenExe = Get-ChildItem "$env:ProgramFiles" -Filter "zen.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
+            if (-not $zenExe) {
+              $zenExe = Get-ChildItem "$env:ProgramFiles" -Filter "zen.exe" -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -First 1 -ExpandProperty FullName
+            }
             if (-not $zenExe) { throw "Zen Browser executable was not found after installation." }
-            $zenAvailable = $true; $status += "Zen Browser: INSTALLED ($zenExe)"
+            $zenAvailable = $true
+            $status += "Zen Browser: INSTALLED ($zenExe; release $zenVersion; SHA-256 verified)"
             "ZEN_EXE=$zenExe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } catch { Write-Warning "Zen Browser unavailable: $($_.Exception.Message)"; $status += "Zen Browser: FAILED - $($_.Exception.Message)" }
+          } catch {
+            Write-Warning "Zen Browser unavailable: $($_.Exception.Message)"
+            $status += "Zen Browser: FAILED - $($_.Exception.Message)"
+          }
+
+          # GeckoDriver: pinned Mozilla-maintained GitHub release asset; no Chocolatey dependency.
           try {
-            choco install geckodriver -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw "Chocolatey returned exit code $LASTEXITCODE." }
-            $gecko = Get-Command geckodriver -ErrorAction SilentlyContinue
-            if (-not $gecko) { throw "geckodriver executable was not found after installation." }
-            $geckoAvailable = $true; $status += "GeckoDriver: INSTALLED ($($gecko.Source))"
-          } catch { Write-Warning "GeckoDriver unavailable: $($_.Exception.Message)"; $status += "GeckoDriver: FAILED - $($_.Exception.Message)" }
+            $geckoVersion = "0.37.1"
+            $geckoUrl = "https://github.com/mozilla/geckodriver/releases/download/v$geckoVersion/geckodriver-v$geckoVersion-win64.zip"
+            $geckoZip = Join-Path $env:RUNNER_TEMP "geckodriver-win64.zip"
+            $geckoDir = Join-Path $env:RUNNER_TEMP "GeckoDriver"
+            Invoke-WebRequest -Uri $geckoUrl -OutFile $geckoZip -MaximumRedirection 5
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($geckoZip)
+            try {
+              if (-not ($archive.Entries | Where-Object { $_.FullName -eq "geckodriver.exe" })) {
+                throw "Official GeckoDriver archive does not contain geckodriver.exe."
+              }
+            } finally {
+              $archive.Dispose()
+            }
+            New-Item -ItemType Directory -Force -Path $geckoDir | Out-Null
+            Expand-Archive -Path $geckoZip -DestinationPath $geckoDir -Force
+            $geckoExe = Join-Path $geckoDir "geckodriver.exe"
+            if (-not (Test-Path $geckoExe)) { throw "geckodriver.exe was not found after extraction." }
+            $versionOutput = & $geckoExe --version 2>&1
+            $versionExit = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            if ($versionExit -ne 0 -or ($versionOutput -join " ") -notmatch "geckodriver $geckoVersion") {
+              throw "Downloaded GeckoDriver did not report expected version $geckoVersion."
+            }
+            $geckoAvailable = $true
+            $status += "GeckoDriver: INSTALLED ($geckoExe; version $geckoVersion; official Mozilla GitHub release)"
+            $geckoDir | Out-File -FilePath $env:GITHUB_PATH -Append
+          } catch {
+            $global:LASTEXITCODE = 0
+            Write-Warning "GeckoDriver unavailable: $($_.Exception.Message)"
+            $status += "GeckoDriver: FAILED - $($_.Exception.Message)"
+          }
+
           "CHROME_AVAILABLE=$($chromeAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ZEN_AVAILABLE=$($zenAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
           "GECKODRIVER_AVAILABLE=$($geckoAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
           $status | Set-Content (Join-Path $evidence "INSTALLATION_STATUS.txt")
           Write-Host ($status -join [Environment]::NewLine)
+
+          # Optional third-party browser failures must not fail this setup step or block CEF/Edge/Chrome tests.
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - name: Launch browser and measure startup and page loading
         shell: pwsh
