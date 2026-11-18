@@ -24,6 +24,17 @@ std::ofstream OpenMetricsFile() {
   if (!path || path[0] == '\0') return std::ofstream();
   return std::ofstream(path, std::ios::out | std::ios::app);
 }
+std::wstring SessionFilePath() {
+  wchar_t local_app_data[MAX_PATH] = {};
+  const DWORD length = GetEnvironmentVariableW(
+      L"LOCALAPPDATA", local_app_data, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return {};
+  std::wstring directory(local_app_data);
+  directory += L"\\DesktopBrowser";
+  if (!CreateDirectoryW(directory.c_str(), nullptr) &&
+      GetLastError() != ERROR_ALREADY_EXISTS) return {};
+  return directory + L"\\session.txt";
+}
 }  // namespace
 
 CefRefPtr<CefLifeSpanHandler> SimpleHandler::GetLifeSpanHandler() { return this; }
@@ -65,6 +76,7 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   if (!browser) return;
   tab_manager_.Add(browser);
   tab_titles_[browser->GetIdentifier()] = L"New Tab";
+  SaveSession();
   NotifyShellChanged();
   RECT rc = {};
   if (main_window_ && GetClientRect(main_window_, &rc))
@@ -79,6 +91,7 @@ void SimpleHandler::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     tab_titles_.erase(id);
     tab_manager_.Remove(id);
   }
+  SaveSession();
   NotifyShellChanged();
   if (tab_manager_.IsEmpty()) CefQuitMessageLoop();
 }
@@ -108,7 +121,10 @@ void SimpleHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
 void SimpleHandler::OnAddressChange(CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame, const CefString& url) {
   CEF_REQUIRE_UI_THREAD();
-  if (browser && frame && frame->IsMain()) NotifyShellChanged();
+  if (browser && frame && frame->IsMain()) {
+    SaveSession();
+    NotifyShellChanged();
+  }
 }
 void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
     const CefString& title) {
@@ -120,6 +136,7 @@ void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
 bool SimpleHandler::MoveTab(int from_index, int to_index) {
   CEF_REQUIRE_UI_THREAD();
   if (!tab_manager_.Move(from_index, to_index)) return false;
+  SaveSession();
   NotifyShellChanged();
   return true;
 }
@@ -228,6 +245,65 @@ std::wstring SimpleHandler::GetTabTitle(int id) const {
   const auto it = tab_titles_.find(id);
   return it == tab_titles_.end() ? L"New Tab" : it->second;
 }
+std::vector<std::string> SimpleHandler::LoadSavedSession() {
+  std::vector<std::string> urls;
+  const std::wstring path = SessionFilePath();
+  if (path.empty()) return urls;
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return urls;
+  LARGE_INTEGER size = {};
+  if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 ||
+      size.QuadPart > 1024 * 1024) {
+    CloseHandle(file);
+    return urls;
+  }
+  std::string data(static_cast<size_t>(size.QuadPart), '\0');
+  DWORD bytes_read = 0;
+  const BOOL ok = ReadFile(file, data.data(),
+      static_cast<DWORD>(data.size()), &bytes_read, nullptr);
+  CloseHandle(file);
+  if (!ok) return urls;
+  data.resize(bytes_read);
+  size_t start = 0;
+  while (start < data.size()) {
+    const size_t end = data.find('\n', start);
+    std::string url = data.substr(start,
+        end == std::string::npos ? std::string::npos : end - start);
+    if (!url.empty() && url.back() == '\r') url.pop_back();
+    if (!url.empty() && url.rfind("about:blank", 0) != 0)
+      urls.push_back(url);
+    if (end == std::string::npos) break;
+    start = end + 1;
+  }
+  return urls;
+}
+
+void SimpleHandler::SaveSession() const {
+  CEF_REQUIRE_UI_THREAD();
+  const std::wstring path = SessionFilePath();
+  if (path.empty()) return;
+  std::string data;
+  for (int id : tab_manager_.GetOrderedIds()) {
+    const auto browser = tab_manager_.GetBrowser(id);
+    if (!browser || !browser->GetMainFrame()) continue;
+    const std::string url = browser->GetMainFrame()->GetURL().ToString();
+    if (url.empty() || url == "about:blank") continue;
+    if (url.find_first_of("\r\n") != std::string::npos) continue;
+    data += url;
+    data.push_back('\n');
+  }
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return;
+  DWORD written = 0;
+  if (!data.empty())
+    WriteFile(file, data.data(), static_cast<DWORD>(data.size()),
+              &written, nullptr);
+  FlushFileBuffers(file);
+  CloseHandle(file);
+}
+
 void SimpleHandler::RecordResourceSample() {
   CEF_REQUIRE_UI_THREAD();
   ResourceSnapshot s;
