@@ -52,71 +52,37 @@ jobs:
           New-Item -ItemType Directory -Force -Path $evidence | Out-Null
           "EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
           $status = @("THIRD-PARTY BROWSER INSTALLATION STATUS")
-          $chromeAvailable = $false
-          $zenAvailable = $false
-          $geckoAvailable = $false
-
-          # Download Chrome only from Google's official distribution endpoint.
+          $chromeAvailable = $false; $zenAvailable = $false; $geckoAvailable = $false
           try {
             $msi = Join-Path $env:RUNNER_TEMP "GoogleChromeEnterprise64.msi"
             Invoke-WebRequest -Uri "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi" -OutFile $msi -MaximumRedirection 5
             $signature = Get-AuthenticodeSignature -FilePath $msi
-            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Google") {
-              throw "Downloaded Chrome MSI does not have a valid Google Authenticode signature."
-            }
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Google") { throw "Chrome MSI lacks a valid Google Authenticode signature." }
             $install = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $msi, "/qn", "/norestart") -Wait -PassThru
             if ($install.ExitCode -notin @(0,3010)) { throw "Chrome MSI installer returned exit code $($install.ExitCode)." }
-            $chromeCandidates = @(
-              "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-              "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
-            )
+            $chromeCandidates = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
             $chromeExe = $chromeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
             if (-not $chromeExe) { throw "Google Chrome executable was not found after installation." }
-            $chromeAvailable = $true
-            $status += "Google Chrome: INSTALLED ($chromeExe)"
+            $chromeAvailable = $true; $status += "Google Chrome: INSTALLED ($chromeExe)"
             "CHROME_EXE=$chromeExe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } catch {
-            Write-Warning "Google Chrome unavailable: $($_.Exception.Message)"
-            $status += "Google Chrome: FAILED - $($_.Exception.Message)"
-          }
-
-          # Zen installation is independent: a Chrome failure must not prevent it.
+          } catch { Write-Warning "Google Chrome unavailable: $($_.Exception.Message)"; $status += "Google Chrome: FAILED - $($_.Exception.Message)" }
           try {
             choco install zen-browser -y --no-progress
             if ($LASTEXITCODE -ne 0) { throw "Chocolatey returned exit code $LASTEXITCODE." }
-            $zenCandidates = @(
-              "$env:ProgramFiles\Zen Browser\zen.exe",
-              "${env:ProgramFiles(x86)}\Zen Browser\zen.exe",
-              "$env:LOCALAPPDATA\Programs\Zen Browser\zen.exe",
-              "$env:LOCALAPPDATA\Zen Browser\zen.exe"
-            )
+            $zenCandidates = @("$env:ProgramFiles\Zen Browser\zen.exe", "${env:ProgramFiles(x86)}\Zen Browser\zen.exe", "$env:LOCALAPPDATA\Programs\Zen Browser\zen.exe", "$env:LOCALAPPDATA\Zen Browser\zen.exe")
             $zenExe = $zenCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $zenExe) {
-              $zenExe = Get-ChildItem "$env:ProgramFiles" -Filter "zen.exe" -Recurse -ErrorAction SilentlyContinue |
-                Select-Object -First 1 -ExpandProperty FullName
-            }
+            if (-not $zenExe) { $zenExe = Get-ChildItem "$env:ProgramFiles" -Filter "zen.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
             if (-not $zenExe) { throw "Zen Browser executable was not found after installation." }
-            $zenAvailable = $true
-            $status += "Zen Browser: INSTALLED ($zenExe)"
+            $zenAvailable = $true; $status += "Zen Browser: INSTALLED ($zenExe)"
             "ZEN_EXE=$zenExe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } catch {
-            Write-Warning "Zen Browser unavailable: $($_.Exception.Message)"
-            $status += "Zen Browser: FAILED - $($_.Exception.Message)"
-          }
-
-          # GeckoDriver is attempted even if either browser installation failed.
+          } catch { Write-Warning "Zen Browser unavailable: $($_.Exception.Message)"; $status += "Zen Browser: FAILED - $($_.Exception.Message)" }
           try {
             choco install geckodriver -y --no-progress
             if ($LASTEXITCODE -ne 0) { throw "Chocolatey returned exit code $LASTEXITCODE." }
             $gecko = Get-Command geckodriver -ErrorAction SilentlyContinue
             if (-not $gecko) { throw "geckodriver executable was not found after installation." }
-            $geckoAvailable = $true
-            $status += "GeckoDriver: INSTALLED ($($gecko.Source))"
-          } catch {
-            Write-Warning "GeckoDriver unavailable: $($_.Exception.Message)"
-            $status += "GeckoDriver: FAILED - $($_.Exception.Message)"
-          }
-
+            $geckoAvailable = $true; $status += "GeckoDriver: INSTALLED ($($gecko.Source))"
+          } catch { Write-Warning "GeckoDriver unavailable: $($_.Exception.Message)"; $status += "GeckoDriver: FAILED - $($_.Exception.Message)" }
           "CHROME_AVAILABLE=$($chromeAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ZEN_AVAILABLE=$($zenAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
           "GECKODRIVER_AVAILABLE=$($geckoAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -333,7 +299,8 @@ jobs:
           }
 
 
-      - name: Measure Microsoft Edge on the same runner
+      - name: Measure Google Chrome on the same runner
+        if: env.CHROME_AVAILABLE == 'true'
         shell: pwsh
         timeout-minutes: 10
         run: |
@@ -496,7 +463,8 @@ jobs:
           $edgeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
           $edgeSummary | Set-Content (Join-Path $evidence "EDGE_PERFORMANCE_RESULTS.txt")
 
-      - name: Measure Microsoft Edge on the same runner
+      - name: Measure Zen Browser on the same runner
+        if: env.ZEN_AVAILABLE == 'true' && env.GECKODRIVER_AVAILABLE == 'true'
         shell: pwsh
         timeout-minutes: 20
         run: |
