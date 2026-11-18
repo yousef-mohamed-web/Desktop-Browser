@@ -117,6 +117,12 @@ void SimpleHandler::OnTitleChange(CefRefPtr<CefBrowser> browser,
   tab_titles_[browser->GetIdentifier()] = title.ToWString();
   NotifyShellChanged();
 }
+bool SimpleHandler::MoveTab(int from_index, int to_index) {
+  CEF_REQUIRE_UI_THREAD();
+  if (!tab_manager_.Move(from_index, to_index)) return false;
+  NotifyShellChanged();
+  return true;
+}
 bool SimpleHandler::SetActiveBrowser(int browser_id) {
   CEF_REQUIRE_UI_THREAD();
   if (!tab_manager_.SetActive(browser_id)) return false;
@@ -214,8 +220,7 @@ size_t SimpleHandler::GetTabCount() const {
 std::vector<int> SimpleHandler::GetTabIds() const {
   CEF_REQUIRE_UI_THREAD();
   std::vector<int> ids;
-  for (const auto& b : tab_manager_.GetBrowsers())
-    if (b) ids.push_back(b->GetIdentifier());
+  ids = tab_manager_.GetOrderedIds();
   return ids;
 }
 std::wstring SimpleHandler::GetTabTitle(int id) const {
