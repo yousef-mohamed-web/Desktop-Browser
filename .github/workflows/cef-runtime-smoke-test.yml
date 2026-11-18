@@ -179,8 +179,14 @@ jobs:
             "Startup metric: process launch to first visible top-level window owned by the browser process.",
             "Page-load metric: CEF main-frame OnLoadStart to OnLoadEnd callback.",
             "Memory metrics: browser process tree (main + all descendant CEF/Chromium processes), renderer-only subtotal, working set and private bytes.",
-            "Memory sampling: five 1-second samples after page load; report average and peak. This is whole-app memory, not a tab-only estimate."
+            "Memory sampling: ten 1-second post-load quiescent samples; report average and peak. This is whole-app memory, not a tab-only estimate.",
+            "CPU sampling: browser process-tree cumulative CPU time deltas across the same quiescent samples, normalized by logical processor count.",
+            "Scope: this prototype currently creates one CEF browser instance. Genuine 1/5/10-tab scenarios and separate cold/warm startup protocols are deferred until the corresponding product capabilities and controlled profile-reset procedure exist."
           )
+          $osInfo = Get-CimInstance Win32_OperatingSystem
+          $logicalCpuCount = [Environment]::ProcessorCount
+          $totalRamMb = [math]::Round(([double]$osInfo.TotalVisibleMemorySize * 1KB) / 1MB, 0)
+          $summary += "Environment: OS=$($osInfo.Caption); logical_processors=$logicalCpuCount; visible_RAM=$totalRamMb MB"
           function Get-BrowserProcessTree([int]$RootPid) {
             $all = @(Get-CimInstance Win32_Process)
             $ids = [System.Collections.Generic.HashSet[int]]::new()
@@ -205,6 +211,7 @@ jobs:
                     Type = if ($p.CommandLine -match '--type=([^\s"]+)') { $Matches[1] } else { 'browser' }
                     WorkingSetBytes = [int64]$g.WorkingSet64
                     PrivateBytes = [int64]$g.PrivateMemorySize64
+                    CpuTimeMs = [double]$g.TotalProcessorTime.TotalMilliseconds
                   }
                 }
               }
@@ -249,7 +256,7 @@ jobs:
             Start-Sleep -Seconds 3
             $samples = @()
             $processRows = @()
-            for ($sample=0; $sample -lt 5; $sample++) {
+            for ($sample=0; $sample -lt 10; $sample++) {
               $rows = @(Get-BrowserProcessTree -RootPid $proc.Id)
               if ($rows.Count -gt 0) {
                 $processRows = $rows
@@ -258,6 +265,8 @@ jobs:
                   PrivateBytes = [int64](($rows | Measure-Object PrivateBytes -Sum).Sum)
                   RendererWorkingSet = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object WorkingSetBytes -Sum).Sum)
                   RendererPrivateBytes = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object PrivateBytes -Sum).Sum)
+                  CpuTimeMs = [double](($rows | Measure-Object CpuTimeMs -Sum).Sum)
+                  SampleTimeUtc = [DateTime]::UtcNow
                   ProcessCount = $rows.Count
                 }
               }
@@ -271,12 +280,23 @@ jobs:
             $avgRendererWs = [math]::Round((($samples | Measure-Object RendererWorkingSet -Average).Average) / 1MB,1)
             $avgRendererPrivate = [math]::Round((($samples | Measure-Object RendererPrivateBytes -Average).Average) / 1MB,1)
             $processCount = [int](($samples | Measure-Object ProcessCount -Maximum).Maximum)
+            $cpuPercentages = @()
+            for ($sample=1; $sample -lt $samples.Count; $sample++) {
+              $elapsedMs = ($samples[$sample].SampleTimeUtc - $samples[$sample-1].SampleTimeUtc).TotalMilliseconds
+              $cpuDeltaMs = $samples[$sample].CpuTimeMs - $samples[$sample-1].CpuTimeMs
+              if ($elapsedMs -gt 0) {
+                $cpuPercentages += [math]::Max(0, ($cpuDeltaMs / $elapsedMs / [Environment]::ProcessorCount) * 100)
+              }
+            }
+            $avgCpu = if ($cpuPercentages.Count -gt 0) { [math]::Round((($cpuPercentages | Measure-Object -Average).Average),2) } else { 0 }
+            $peakCpu = if ($cpuPercentages.Count -gt 0) { [math]::Round((($cpuPercentages | Measure-Object -Maximum).Maximum),2) } else { 0 }
             $summary += ""
             $summary += "URL: $($case.Url)"
             $summary += "Startup to visible window: $startupMs ms"
             $summary += "CEF page load: $pageMetric"
             $summary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
             $summary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+            $summary += "Post-load quiescent CPU (whole process tree, normalized to total logical CPU): average=$avgCpu%; peak=$peakCpu%"
             $summary += "Renderer-only memory: working_set_avg=$avgRendererWs MB; private_bytes_avg=$avgRendererPrivate MB"
             $summary += "Browser process count: $processCount"
             $summary += "Browser main PID: $($proc.Id)"
@@ -358,6 +378,7 @@ jobs:
                     Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
                     Type=if($p.CommandLine -match '--type=([^\s"]+)'){$Matches[1]}else{'browser'}
                     WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
+                    CpuTimeMs=[double]$g.TotalProcessorTime.TotalMilliseconds
                   }
                 }
               }
@@ -434,7 +455,7 @@ jobs:
               }
               if(-not $ready){throw "Edge did not report a completed navigation timing for $($case.Url)."}
               Start-Sleep -Seconds 3; $samples=@(); $lastRows=@()
-              for($s=0;$s -lt 5;$s++){
+              for($s=0;$s -lt 10;$s++){
                 $rows=@(Get-Tree -RootPid $edge.Id)
                 if($rows.Count -gt 0){
                   $lastRows=$rows
@@ -443,6 +464,8 @@ jobs:
                     Private=[int64](($rows|Measure-Object Private -Sum).Sum)
                     RendererWS=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object WS -Sum).Sum)
                     RendererPrivate=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object Private -Sum).Sum)
+                    CpuTimeMs=[double](($rows|Measure-Object CpuTimeMs -Sum).Sum)
+                    SampleTimeUtc=[DateTime]::UtcNow
                     Count=$rows.Count
                   }
                 }
@@ -456,11 +479,20 @@ jobs:
               $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
               $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
               $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
+              $cpuPercentages=@()
+              for($s=1;$s -lt $samples.Count;$s++){
+                $elapsedMs=($samples[$s].SampleTimeUtc-$samples[$s-1].SampleTimeUtc).TotalMilliseconds
+                $cpuDeltaMs=$samples[$s].CpuTimeMs-$samples[$s-1].CpuTimeMs
+                if($elapsedMs -gt 0){$cpuPercentages += [math]::Max(0,($cpuDeltaMs/$elapsedMs/[Environment]::ProcessorCount)*100)}
+              }
+              $avgCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Average).Average),2)}else{0}
+              $peakCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Maximum).Maximum),2)}else{0}
               $edgeSummary += ""; $edgeSummary += "URL: $($case.Url)"
               $edgeSummary += "Startup to visible window: $startupMs ms"
               $edgeSummary += "Edge Navigation Timing load event: $loadMs ms"
               $edgeSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
               $edgeSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+              $edgeSummary += "Post-load quiescent CPU (whole process tree, normalized to total logical CPU): average=$avgCpu%; peak=$peakCpu%"
               $edgeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
               $edgeSummary += "Browser process count (max across samples): $maxCount"
               $edgeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
@@ -522,6 +554,7 @@ jobs:
                     Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
                     Type=if($p.CommandLine -match '--type=([^\s"]+)'){$Matches[1]}else{'browser'}
                     WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
+                    CpuTimeMs=[double]$g.TotalProcessorTime.TotalMilliseconds
                   }
                 }
               }
@@ -598,7 +631,7 @@ jobs:
               }
               if(-not $ready){throw "Chrome did not report a completed navigation timing for $($case.Url)."}
               Start-Sleep -Seconds 3; $samples=@(); $lastRows=@()
-              for($s=0;$s -lt 5;$s++){
+              for($s=0;$s -lt 10;$s++){
                 $rows=@(Get-Tree -RootPid $chrome.Id)
                 if($rows.Count -gt 0){
                   $lastRows=$rows
@@ -607,6 +640,8 @@ jobs:
                     Private=[int64](($rows|Measure-Object Private -Sum).Sum)
                     RendererWS=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object WS -Sum).Sum)
                     RendererPrivate=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object Private -Sum).Sum)
+                    CpuTimeMs=[double](($rows|Measure-Object CpuTimeMs -Sum).Sum)
+                    SampleTimeUtc=[DateTime]::UtcNow
                     Count=$rows.Count
                   }
                 }
@@ -620,11 +655,20 @@ jobs:
               $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
               $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
               $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
+              $cpuPercentages=@()
+              for($s=1;$s -lt $samples.Count;$s++){
+                $elapsedMs=($samples[$s].SampleTimeUtc-$samples[$s-1].SampleTimeUtc).TotalMilliseconds
+                $cpuDeltaMs=$samples[$s].CpuTimeMs-$samples[$s-1].CpuTimeMs
+                if($elapsedMs -gt 0){$cpuPercentages += [math]::Max(0,($cpuDeltaMs/$elapsedMs/[Environment]::ProcessorCount)*100)}
+              }
+              $avgCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Average).Average),2)}else{0}
+              $peakCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Maximum).Maximum),2)}else{0}
               $chromeSummary += ""; $chromeSummary += "URL: $($case.Url)"
               $chromeSummary += "Startup to visible window: $startupMs ms"
               $chromeSummary += "Chrome Navigation Timing load event: $loadMs ms"
               $chromeSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
               $chromeSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+              $chromeSummary += "Post-load quiescent CPU (whole process tree, normalized to total logical CPU): average=$avgCpu%; peak=$peakCpu%"
               $chromeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
               $chromeSummary += "Browser process count (max across samples): $maxCount"
               $chromeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
