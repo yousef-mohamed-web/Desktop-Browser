@@ -44,6 +44,7 @@ class SimpleHandler : public CefClient, public CefLifeSpanHandler,
   CefRefPtr<CefBrowser> GetBrowser() const;
   CefRefPtr<CefBrowser> GetBrowser(int browser_id) const;
   bool SetActiveBrowser(int browser_id);
+  bool MoveTab(int from_index, int to_index);
   bool TryCloseAllBrowsers();
   size_t GetTabCount() const;
   std::vector<int> GetTabIds() const;
