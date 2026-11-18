@@ -55,7 +55,9 @@ jobs:
               Start-Sleep -Seconds 30
             } while (-not $sourceRunId)
           }
-          if ($sourceRunId -notmatch '^\d+
+          if ($sourceRunId -notmatch '^\d+$') { throw "source_run_id must be numeric." }
+          Write-Host "Using successful CEF host build run $sourceRunId."
+          $artifactDir = Join-Path $env:RUNNER_TEMP "DesktopBrowserArtifact"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
           gh run download $sourceRunId --repo "${{ github.repository }}" --name "desktop-browser-cef-host-x64" --dir $artifactDir
           if ($LASTEXITCODE -ne 0) { throw "Could not download browser build artifact from run $sourceRunId." }
