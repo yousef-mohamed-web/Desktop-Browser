@@ -108,7 +108,8 @@ jobs:
             [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
             [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
             [DllImport("user32.dll")] static extern IntPtr GetWindowDC(IntPtr hwnd);
-            [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+            [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
             [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
             [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
             [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dst, int x, int y, int width, int height, IntPtr src, int srcX, int srcY, uint rop);
@@ -157,7 +158,8 @@ jobs:
                 if(pixelsPtr!=IntPtr.Zero) Marshal.FreeHGlobal(pixelsPtr);
                 if(info!=IntPtr.Zero) Marshal.FreeHGlobal(info);
                 if(old!=IntPtr.Zero && memory!=IntPtr.Zero) SelectObject(memory,old);
-                if(bitmap!=IntPtr.Zero) DeleteObject(bitmap);                if(memory!=IntPtr.Zero) DeleteDC(memory);
+                if(bitmap!=IntPtr.Zero) DeleteObject(bitmap);
+                if(memory!=IntPtr.Zero) DeleteDC(memory);
                 ReleaseDC(IntPtr.Zero,screen);
               }
             }
@@ -206,7 +208,8 @@ jobs:
                     Pid = [int]$p.ProcessId
                     ParentPid = [int]$p.ParentProcessId
                     Type = if ($p.CommandLine -match '--type=([^\s"]+)') { $Matches[1] } else { 'browser' }
-                    WorkingSetBytes = [int64]$g.WorkingSet64                    PrivateBytes = [int64]$g.PrivateMemorySize64
+                    WorkingSetBytes = [int64]$g.WorkingSet64
+                    PrivateBytes = [int64]$g.PrivateMemorySize64
                   }
                 }
               }
@@ -255,7 +258,8 @@ jobs:
               $rows = @(Get-BrowserProcessTree -RootPid $proc.Id)
               if ($rows.Count -gt 0) {
                 $processRows = $rows
-                $samples += [pscustomobject]@{                  WorkingSet = [int64](($rows | Measure-Object WorkingSetBytes -Sum).Sum)
+                $samples += [pscustomobject]@{
+                  WorkingSet = [int64](($rows | Measure-Object WorkingSetBytes -Sum).Sum)
                   PrivateBytes = [int64](($rows | Measure-Object PrivateBytes -Sum).Sum)
                   RendererWorkingSet = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object WorkingSetBytes -Sum).Sum)
                   RendererPrivateBytes = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object PrivateBytes -Sum).Sum)
@@ -299,13 +303,13 @@ jobs:
           }
 
 
-      - name: Measure Google Chrome on the same runner
-        if: env.CHROME_AVAILABLE == 'true'
+      - name: Measure Microsoft Edge on the same runner
         shell: pwsh
         timeout-minutes: 10
         run: |
           $ErrorActionPreference = "Stop"
-          $edgeCandidates = @(            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+          $edgeCandidates = @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
             "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
           )
           $edgeExe = $edgeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -354,7 +358,8 @@ jobs:
             }
           }
           function Get-CdpPage($Port) {
-            for($n=0;$n -lt 60;$n++){              try {
+            for($n=0;$n -lt 60;$n++){
+              try {
                 $targets=Invoke-RestMethod -Uri "http://127.0.0.1:$Port/json" -TimeoutSec 2
                 $page=$targets | Where-Object { $_.type -eq "page" -and $_.webSocketDebuggerUrl } | Select-Object -First 1
                 if($page){return $page}
@@ -403,7 +408,8 @@ jobs:
             $edge=Start-Process -FilePath $edgeExe -ArgumentList @("--user-data-dir=$profile","--remote-debugging-port=$port","--no-first-run","--no-default-browser-check","--disable-background-mode",$case.Url) -PassThru
             $hwnd=[IntPtr]::Zero
             for($i=0;$i -lt 90;$i++){
-              Start-Sleep -Milliseconds 500; $hwnd=[EdgeWindowProbe]::Find([uint32]$edge.Id)              if($hwnd -ne [IntPtr]::Zero){break}
+              Start-Sleep -Milliseconds 500; $hwnd=[EdgeWindowProbe]::Find([uint32]$edge.Id)
+              if($hwnd -ne [IntPtr]::Zero){break}
               if($edge.HasExited){throw "Edge exited before creating a visible window."}
             }
             if($hwnd -eq [IntPtr]::Zero){throw "Edge did not create a visible window within 45 seconds."}
@@ -452,7 +458,8 @@ jobs:
               $edgeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
               $edgeSummary += "Browser process count (max across samples): $maxCount"
               $edgeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
-              foreach($r in $lastRows){$edgeSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}              Write-Host "Edge $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
+              foreach($r in $lastRows){$edgeSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
+              Write-Host "Edge $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
             } finally {
               $socket.Dispose()
               Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "msedge.exe" -and $_.CommandLine -like "*$profile*" } |
@@ -463,8 +470,8 @@ jobs:
           $edgeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
           $edgeSummary | Set-Content (Join-Path $evidence "EDGE_PERFORMANCE_RESULTS.txt")
 
-      - name: Measure Zen Browser on the same runner
-        if: env.ZEN_AVAILABLE == 'true' && env.GECKODRIVER_AVAILABLE == 'true'
+      - name: Measure Google Chrome on the same runner
+        if: env.CHROME_AVAILABLE == 'true'
         shell: pwsh
         timeout-minutes: 20
         run: |
@@ -502,7 +509,8 @@ jobs:
               }
             }
             foreach ($p in $all) {
-              if ($ids.Contains([int]$p.ProcessId)) {                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
                 if ($g) {
                   [pscustomobject]@{
                     Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
@@ -551,7 +559,8 @@ jobs:
             "Note: Desktop Browser uses CEF OnLoadStart-to-OnLoadEnd; page-load boundaries differ slightly and are reported separately.",
             "Memory metrics: Chrome root process plus all descendant processes; working set and private bytes summed across the process tree."
           )
-          $caseIndex=0          foreach($case in @(
+          $caseIndex=0
+          foreach($case in @(
             @{Name="example";Url="https://example.com/"},
             @{Name="wikipedia";Url="https://www.wikipedia.org/"},
             @{Name="chatgpt";Url="https://chatgpt.com/"},
@@ -601,3 +610,185 @@ jobs:
               $avgWs=[math]::Round((($samples|Measure-Object WS -Average).Average)/1MB,1)
               $peakWs=[math]::Round((($samples|Measure-Object WS -Maximum).Maximum)/1MB,1)
               $avgPrivate=[math]::Round((($samples|Measure-Object Private -Average).Average)/1MB,1)
+              $peakPrivate=[math]::Round((($samples|Measure-Object Private -Maximum).Maximum)/1MB,1)
+              $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
+              $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
+              $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
+              $chromeSummary += ""; $chromeSummary += "URL: $($case.Url)"
+              $chromeSummary += "Startup to visible window: $startupMs ms"
+              $chromeSummary += "Chrome Navigation Timing load event: $loadMs ms"
+              $chromeSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
+              $chromeSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+              $chromeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
+              $chromeSummary += "Browser process count (max across samples): $maxCount"
+              $chromeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
+              foreach($r in $lastRows){$chromeSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
+              Write-Host "Chrome $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
+            } finally {
+              $socket.Dispose()
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "mschrome.exe" -and $_.CommandLine -like "*$profile*" } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+              Start-Sleep -Seconds 2
+            }
+          }
+          $chromeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
+          $chromeSummary | Set-Content (Join-Path $evidence "CHROME_PERFORMANCE_RESULTS.txt")
+
+      - name: Measure Zen Browser on the same runner
+        if: env.ZEN_AVAILABLE == 'true' && env.GECKODRIVER_AVAILABLE == 'true'
+        shell: pwsh
+        timeout-minutes: 25
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class ZenWindowProbe {
+            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            public static IntPtr Find(uint pid) {
+              IntPtr found=IntPtr.Zero;
+              EnumWindows(delegate(IntPtr h,IntPtr s) {
+                uint owner; GetWindowThreadProcessId(h,out owner);
+                if(owner==pid && IsWindowVisible(h)){found=h;return false;} return true;
+              },IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          function Get-Tree([int]$RootPid) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.HashSet[int]]::new()
+            [void]$ids.Add($RootPid); $changed = $true
+            while ($changed) {
+              $changed = $false
+              foreach ($p in $all) {
+                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
+                  [void]$ids.Add([int]$p.ProcessId); $changed = $true
+                }
+              }
+            }
+            foreach ($p in $all) {
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($g) {
+                  [pscustomobject]@{
+                    Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
+                    Type=if($p.CommandLine -match '-contentproc'){'content'}else{'browser'}
+                    WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
+                  }
+                }
+              }
+            }
+          }
+          $driver = Start-Process -FilePath (Get-Command geckodriver).Source -ArgumentList @("--host","127.0.0.1","--port","4444") -PassThru
+          try {
+            $driverReady = $false
+            for($i=0;$i -lt 40;$i++){
+              try { Invoke-RestMethod -Uri "http://127.0.0.1:4444/status" -TimeoutSec 2 | Out-Null; $driverReady=$true; break } catch { Start-Sleep -Milliseconds 500 }
+            }
+            if(-not $driverReady){throw "GeckoDriver did not become ready."}
+            $evidence=$env:EVIDENCE_DIR
+            $zenSummary=@(
+              "",
+              "ZEN BROWSER (same Windows Server 2022 x64 runner)",
+              "Startup metric: WebDriver session launch request to first visible Zen window.",
+              "Page-load metric: Navigation Timing API loadEventEnd minus navigationStart, read through Firefox WebDriver.",
+              "Memory metrics: Zen root process plus all descendant processes; working set and private bytes summed across the process tree.",
+              "Zen uses the Firefox/Gecko engine and is automated with GeckoDriver, not Chromium DevTools."
+            )
+            $caseIndex=0
+            foreach($case in @(
+              @{Name="example";Url="https://example.com/"},
+              @{Name="wikipedia";Url="https://www.wikipedia.org/"},
+              @{Name="chatgpt";Url="https://chatgpt.com/"},
+              @{Name="github";Url="https://github.com/"},
+              @{Name="claude";Url="https://claude.com/"}
+            )){
+              $caseIndex++
+              $profile=Join-Path $env:RUNNER_TEMP "ZenProfile-$caseIndex"
+              New-Item -ItemType Directory -Force -Path $profile | Out-Null
+              $body=@{capabilities=@{alwaysMatch=@{browserName="firefox";"moz:firefoxOptions"=@{binary=$env:ZEN_EXE;args=@("-no-remote","-profile",$profile)}}}} | ConvertTo-Json -Depth 12
+              $clock=[System.Diagnostics.Stopwatch]::StartNew()
+              $session=Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:4444/session" -ContentType "application/json" -Body $body -TimeoutSec 120
+              $sessionId=$session.value.sessionId
+              if(-not $sessionId){throw "GeckoDriver did not return a Zen WebDriver session."}
+              $zenProc=Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "zen.exe" } | Sort-Object CreationDate -Descending | Select-Object -First 1
+              if(-not $zenProc){throw "Zen process was not found after WebDriver launch."}
+              $hwnd=[IntPtr]::Zero
+              for($i=0;$i -lt 90;$i++){
+                $hwnd=[ZenWindowProbe]::Find([uint32]$zenProc.ProcessId)
+                if($hwnd -ne [IntPtr]::Zero){break}
+                Start-Sleep -Milliseconds 500
+              }
+              if($hwnd -eq [IntPtr]::Zero){throw "Zen did not create a visible window within 45 seconds."}
+              $clock.Stop(); $startupMs=$clock.ElapsedMilliseconds
+              try {
+                Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:4444/session/$sessionId/url" -ContentType "application/json" -Body (@{url=$case.Url}|ConvertTo-Json) -TimeoutSec 180 | Out-Null
+                $ready=$false; $loadMs=$null
+                for($i=0;$i -lt 240;$i++){
+                  $scriptBody=@{script="(()=>{const n=performance.getEntriesByType('navigation')[0];return {state:document.readyState,loadMs:n&&n.loadEventEnd>0?n.loadEventEnd-n.startTime:null}})()";args=@()}|ConvertTo-Json -Depth 6
+                  $result=Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:4444/session/$sessionId/execute/sync" -ContentType "application/json" -Body $scriptBody -TimeoutSec 15
+                  $value=$result.value
+                  if($value.state -eq "complete" -and $null -ne $value.loadMs -and [double]$value.loadMs -gt 0){$ready=$true;$loadMs=[math]::Round([double]$value.loadMs,1);break}
+                  Start-Sleep -Milliseconds 500
+                }
+                if(-not $ready){throw "Zen did not report a completed navigation timing for $($case.Url)."}
+                Start-Sleep -Seconds 3; $samples=@(); $lastRows=@()
+                for($s=0;$s -lt 5;$s++){
+                  $rows=@(Get-Tree -RootPid ([int]$zenProc.ProcessId))
+                  if($rows.Count -gt 0){
+                    $lastRows=$rows
+                    $samples += [pscustomobject]@{
+                      WS=[int64](($rows|Measure-Object WS -Sum).Sum)
+                      Private=[int64](($rows|Measure-Object Private -Sum).Sum)
+                      RendererWS=[int64](($rows|Where-Object Type -eq 'content'|Measure-Object WS -Sum).Sum)
+                      RendererPrivate=[int64](($rows|Where-Object Type -eq 'content'|Measure-Object Private -Sum).Sum)
+                      Count=$rows.Count
+                    }
+                  }
+                  Start-Sleep -Seconds 1
+                }
+                if($samples.Count -eq 0){throw "Could not collect Zen process-tree memory."}
+                $avgWs=[math]::Round((($samples|Measure-Object WS -Average).Average)/1MB,1)
+                $peakWs=[math]::Round((($samples|Measure-Object WS -Maximum).Maximum)/1MB,1)
+                $avgPrivate=[math]::Round((($samples|Measure-Object Private -Average).Average)/1MB,1)
+                $peakPrivate=[math]::Round((($samples|Measure-Object Private -Maximum).Maximum)/1MB,1)
+                $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
+                $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
+                $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
+                $zenSummary += ""; $zenSummary += "URL: $($case.Url)"
+                $zenSummary += "Startup to visible window: $startupMs ms"
+                $zenSummary += "Zen Navigation Timing load event: $loadMs ms"
+                $zenSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
+                $zenSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+                $zenSummary += "Content-process-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
+                $zenSummary += "Browser process count (max across samples): $maxCount"
+                $zenSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
+                foreach($r in $lastRows){$zenSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
+                Write-Host "Zen $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
+              } finally {
+                Invoke-RestMethod -Method Delete -Uri "http://127.0.0.1:4444/session/$sessionId" -TimeoutSec 30 | Out-Null
+                Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "zen.exe" -and $_.CommandLine -like "*$profile*" } |
+                  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+                Start-Sleep -Seconds 2
+              }
+            }
+            $zenSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
+            $zenSummary | Set-Content (Join-Path $evidence "ZEN_PERFORMANCE_RESULTS.txt")
+          } finally {
+            Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
+          }
+
+
+
+      - name: Upload performance results, screenshots and CEF metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-browser-runtime-performance-evidence
+          path: ${{ runner.temp }}/DesktopBrowserPerformanceEvidence/
+          if-no-files-found: warn
+          retention-days: 14
