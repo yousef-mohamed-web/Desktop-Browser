@@ -1,10 +1,10 @@
-name: Desktop Browser - Windows Runtime Visual Smoke Test
+name: Desktop Browser - Windows Runtime Performance Test
 
 on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: "Successful CEF host build run ID"
+        description: "Successful CEF host build run ID containing the timing instrumentation"
         required: true
         default: "44163254949"
         type: string
@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  runtime-smoke-test:
-    name: Run browser and capture staged screenshots (Windows x64)
+  runtime-performance-test:
+    name: Measure startup and page load (Windows x64)
     runs-on: windows-2022
     timeout-minutes: 20
 
@@ -27,180 +27,173 @@ jobs:
       - name: Check out project
         uses: actions/checkout@v4
 
-      - name: Download the successful browser build artifact
+      - name: Download browser build artifact
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $sourceRunId = "${{ inputs.source_run_id }}"
           if ($sourceRunId -notmatch '^\d+$') { throw "source_run_id must be numeric." }
-
           $artifactDir = Join-Path $env:RUNNER_TEMP "DesktopBrowserArtifact"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
           gh run download $sourceRunId --repo "${{ github.repository }}" --name "desktop-browser-cef-host-x64" --dir $artifactDir
-          if ($LASTEXITCODE -ne 0) { throw "Could not download the browser build artifact from run $sourceRunId." }
-
-          $exe = Join-Path $artifactDir "DesktopBrowser.exe"
-          $dll = Join-Path $artifactDir "DesktopBrowser.dll"
-          $cef = Join-Path $artifactDir "libcef.dll"
-          foreach ($file in @($exe, $dll, $cef)) {
-            if (-not (Test-Path $file)) { throw "Required browser file is missing: $file" }
+          if ($LASTEXITCODE -ne 0) { throw "Could not download browser build artifact from run $sourceRunId." }
+          foreach ($name in @("DesktopBrowser.exe", "DesktopBrowser.dll", "libcef.dll")) {
+            if (-not (Test-Path (Join-Path $artifactDir $name))) { throw "Missing required file: $name" }
           }
-
           "BROWSER_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          Write-Host "Downloaded browser artifact from run $sourceRunId."
 
-      - name: Launch browser, capture startup and loaded-page screenshots
+      - name: Launch browser and measure startup and page loading
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 12
         run: |
           $ErrorActionPreference = "Stop"
-          # Capture the visible desktop window using native Win32 GDI only.
-          # This avoids System.Drawing / GDI+ assembly differences across PowerShell runtimes.
           $helper = @'
           using System;
           using System.IO;
           using System.Runtime.InteropServices;
 
           public static class WindowCapture {
-            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-            public static extern IntPtr FindWindow(string className, string windowName);
-            [DllImport("user32.dll")]
-            public static extern bool IsWindow(IntPtr hWnd);
-            [DllImport("user32.dll")]
-            public static extern bool SetForegroundWindow(IntPtr hWnd);
-            [DllImport("user32.dll")]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-            [DllImport("user32.dll")]
-            static extern IntPtr GetWindowDC(IntPtr hWnd);
-            [DllImport("user32.dll")]
-            static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
-            [DllImport("gdi32.dll")]
-            static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-            [DllImport("gdi32.dll")]
-            static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
-            [DllImport("gdi32.dll")]
-            static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
-            [DllImport("gdi32.dll")]
-            static extern bool BitBlt(IntPtr dst, int x, int y, int width, int height,
-              IntPtr src, int srcX, int srcY, uint rop);
-            [DllImport("gdi32.dll")]
-            static extern int GetDIBits(IntPtr hdc, IntPtr bitmap, uint start, uint lines,
-              IntPtr bits, IntPtr info, uint usage);
-            [DllImport("gdi32.dll")]
-            static extern bool DeleteObject(IntPtr obj);
-            [DllImport("gdi32.dll")]
-            static extern bool DeleteDC(IntPtr hdc);
+            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+            [DllImport("user32.dll")] static extern IntPtr GetWindowDC(IntPtr hwnd);
+            [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
+            [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dst, int x, int y, int width, int height, IntPtr src, int srcX, int srcY, uint rop);
+            [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr hdc, IntPtr bitmap, uint start, uint lines, IntPtr bits, IntPtr info, uint usage);
+            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr hdc);
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+            public static IntPtr FindVisibleWindowForProcess(uint pid) {
+              IntPtr found = IntPtr.Zero;
+              EnumWindows(delegate(IntPtr hwnd, IntPtr state) {
+                uint owner;
+                GetWindowThreadProcessId(hwnd, out owner);
+                if (owner == pid && IsWindowVisible(hwnd)) { found = hwnd; return false; }
+                return true;
+              }, IntPtr.Zero);
+              return found;
+            }
 
             public static void Save(IntPtr hwnd, string path) {
               RECT r;
               if (!GetWindowRect(hwnd, out r)) throw new Exception("GetWindowRect failed.");
-              int width = r.Right - r.Left, height = r.Bottom - r.Top;
-              if (width < 200 || height < 150) throw new Exception("Invalid browser window dimensions.");
-              IntPtr screen = GetWindowDC(IntPtr.Zero);
+              int width = r.Right-r.Left, height = r.Bottom-r.Top;
+              if (width < 200 || height < 150) throw new Exception("Invalid window dimensions.");
+              IntPtr screen = GetWindowDC(IntPtr.Zero), memory = IntPtr.Zero, bitmap = IntPtr.Zero, old = IntPtr.Zero, info = IntPtr.Zero, pixelsPtr = IntPtr.Zero;
               if (screen == IntPtr.Zero) throw new Exception("GetWindowDC failed.");
-              IntPtr memory = IntPtr.Zero, bitmap = IntPtr.Zero, old = IntPtr.Zero;
-              IntPtr info = IntPtr.Zero, pixelPtr = IntPtr.Zero;
               try {
-                memory = CreateCompatibleDC(screen);
-                bitmap = CreateCompatibleBitmap(screen, width, height);
-                if (memory == IntPtr.Zero || bitmap == IntPtr.Zero) throw new Exception("GDI bitmap creation failed.");
-                old = SelectObject(memory, bitmap);
-                if (!BitBlt(memory, 0, 0, width, height, screen, r.Left, r.Top, 0x00CC0020))
-                  throw new Exception("BitBlt could not capture the browser window.");
-                int stride = ((width * 3 + 3) / 4) * 4;
-                int imageBytes = stride * height;
-                byte[] pixels = new byte[imageBytes];
-                // BITMAPINFOHEADER: 40 bytes, 24-bit uncompressed, top-down.
-                info = Marshal.AllocHGlobal(40);
-                for (int i = 0; i < 40; i++) Marshal.WriteByte(info, i, 0);
-                Marshal.WriteInt32(info, 0, 40);
-                Marshal.WriteInt32(info, 4, width);
-                Marshal.WriteInt32(info, 8, -height);
-                Marshal.WriteInt16(info, 12, 1);
-                Marshal.WriteInt16(info, 14, 24);
-                Marshal.WriteInt32(info, 20, imageBytes);
-                pixelPtr = Marshal.AllocHGlobal(imageBytes);
-                if (GetDIBits(memory, bitmap, 0, (uint)height, pixelPtr, info, 0) == 0)
-                  throw new Exception("GetDIBits failed.");
-                Marshal.Copy(pixelPtr, pixels, 0, imageBytes);
-                using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write)) {
-                  byte[] header = new byte[14];
-                  header[0] = 0x42; header[1] = 0x4D;
-                  int fileSize = 14 + 40 + imageBytes;
-                  BitConverter.GetBytes(fileSize).CopyTo(header, 2);
-                  BitConverter.GetBytes(54).CopyTo(header, 10);
-                  fs.Write(header, 0, header.Length);
-                  byte[] dib = new byte[40];
-                  Marshal.Copy(info, dib, 0, 40);
-                  fs.Write(dib, 0, dib.Length);
-                  fs.Write(pixels, 0, pixels.Length);
+                memory = CreateCompatibleDC(screen); bitmap = CreateCompatibleBitmap(screen,width,height);
+                if (memory == IntPtr.Zero || bitmap == IntPtr.Zero) throw new Exception("GDI allocation failed.");
+                old = SelectObject(memory,bitmap);
+                if (!BitBlt(memory,0,0,width,height,screen,r.Left,r.Top,0x00CC0020)) throw new Exception("BitBlt failed.");
+                int stride=((width*3+3)/4)*4, bytes=stride*height;
+                info=Marshal.AllocHGlobal(40); for(int i=0;i<40;i++) Marshal.WriteByte(info,i,0);
+                Marshal.WriteInt32(info,0,40); Marshal.WriteInt32(info,4,width); Marshal.WriteInt32(info,8,-height);
+                Marshal.WriteInt16(info,12,1); Marshal.WriteInt16(info,14,24); Marshal.WriteInt32(info,20,bytes);
+                pixelsPtr=Marshal.AllocHGlobal(bytes);
+                if(GetDIBits(memory,bitmap,0,(uint)height,pixelsPtr,info,0)==0) throw new Exception("GetDIBits failed.");
+                byte[] pixels=new byte[bytes]; Marshal.Copy(pixelsPtr,pixels,0,bytes);
+                using(FileStream fs=new FileStream(path,FileMode.Create,FileAccess.Write)) {
+                  byte[] header=new byte[14]; header[0]=0x42; header[1]=0x4D;
+                  BitConverter.GetBytes(54+bytes).CopyTo(header,2); BitConverter.GetBytes(54).CopyTo(header,10);
+                  fs.Write(header,0,14); byte[] dib=new byte[40]; Marshal.Copy(info,dib,0,40);
+                  fs.Write(dib,0,40); fs.Write(pixels,0,pixels.Length);
                 }
               } finally {
-                if (pixelPtr != IntPtr.Zero) Marshal.FreeHGlobal(pixelPtr);
-                if (info != IntPtr.Zero) Marshal.FreeHGlobal(info);
-                if (old != IntPtr.Zero && memory != IntPtr.Zero) SelectObject(memory, old);
-                if (bitmap != IntPtr.Zero) DeleteObject(bitmap);
-                if (memory != IntPtr.Zero) DeleteDC(memory);
-                ReleaseDC(IntPtr.Zero, screen);
+                if(pixelsPtr!=IntPtr.Zero) Marshal.FreeHGlobal(pixelsPtr);
+                if(info!=IntPtr.Zero) Marshal.FreeHGlobal(info);
+                if(old!=IntPtr.Zero && memory!=IntPtr.Zero) SelectObject(memory,old);
+                if(bitmap!=IntPtr.Zero) DeleteObject(bitmap);
+                if(memory!=IntPtr.Zero) DeleteDC(memory);
+                ReleaseDC(IntPtr.Zero,screen);
               }
             }
           }
           '@
           Add-Type -TypeDefinition $helper -ReferencedAssemblies "System.dll"
 
-          $screenshots = Join-Path $env:RUNNER_TEMP "DesktopBrowserScreenshots"
-          New-Item -ItemType Directory -Force -Path $screenshots | Out-Null
-          "SCREENSHOT_DIR=$screenshots" | Out-File -FilePath $env:GITHUB_ENV -Append
-
+          $evidence = Join-Path $env:RUNNER_TEMP "DesktopBrowserPerformanceEvidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          "EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
           $exe = Join-Path $env:BROWSER_DIR "DesktopBrowser.exe"
-          $results = @()
           $cases = @(
-            @{ Url = "https://example.com/"; Initial = "01-example-window-created.bmp"; Loaded = "02-example-after-wait.bmp" },
-            @{ Url = "https://www.wikipedia.org/"; Initial = "03-wikipedia-window-created.bmp"; Loaded = "04-wikipedia-after-wait.bmp" }
+            @{ Name="example"; Url="https://example.com/" },
+            @{ Name="wikipedia"; Url="https://www.wikipedia.org/" }
           )
-
+          $summary = @(
+            "Desktop Browser runtime performance test",
+            "Runner: Windows Server 2022 x64 (GitHub-hosted; not a low-end PC benchmark)",
+            "Startup metric: process launch to first visible top-level window owned by the browser process.",
+            "Page-load metric: CEF main-frame OnLoadStart to OnLoadEnd callback."
+          )
           foreach ($case in $cases) {
-            Write-Host "Starting browser test for $($case.Url)"
+            Write-Host "Testing $($case.Url)"
+            $metricsFile = Join-Path $evidence "$($case.Name)-cef-metrics.txt"
+            Remove-Item $metricsFile -Force -ErrorAction SilentlyContinue
+            $env:DESKTOP_BROWSER_METRICS_FILE = $metricsFile
+            $clock = [System.Diagnostics.Stopwatch]::StartNew()
             $proc = Start-Process -FilePath $exe -ArgumentList @("--url=$($case.Url)") -WorkingDirectory $env:BROWSER_DIR -PassThru
             $hwnd = [IntPtr]::Zero
-            for ($i = 0; $i -lt 60; $i++) {
-              Start-Sleep -Seconds 1
-              $hwnd = [WindowCapture]::FindWindow($null, "Desktop Browser - CEF Host")
-              if ($hwnd -ne [IntPtr]::Zero -and [WindowCapture]::IsWindow($hwnd)) { break }
-              if ($proc.HasExited) { throw "Browser exited before creating its window for $($case.Url). Exit code: $($proc.ExitCode)" }
+            for ($i=0; $i -lt 90; $i++) {
+              Start-Sleep -Milliseconds 500
+              $hwnd = [WindowCapture]::FindVisibleWindowForProcess([uint32]$proc.Id)
+              if ($hwnd -ne [IntPtr]::Zero) { break }
+              if ($proc.HasExited) { throw "Browser process exited before creating a visible window. Exit code: $($proc.ExitCode)" }
             }
-            if ($hwnd -eq [IntPtr]::Zero) { throw "Browser window was not created for $($case.Url)." }
+            if ($hwnd -eq [IntPtr]::Zero) { throw "No visible top-level window owned by browser PID $($proc.Id) appeared within 45 seconds." }
+            $clock.Stop()
+            $startupMs = $clock.ElapsedMilliseconds
             [WindowCapture]::SetForegroundWindow($hwnd) | Out-Null
-            Start-Sleep -Seconds 3
-            [WindowCapture]::Save($hwnd, (Join-Path $env.SCREENSHOT_DIR $case.Initial))
-            Write-Host "Captured startup window: $($case.Initial)"
-            Start-Sleep -Seconds 18
-            if ($proc.HasExited) { throw "Browser exited while waiting for page rendering at $($case.Url)." }
-            [WindowCapture]::Save($hwnd, (Join-Path $env.SCREENSHOT_DIR $case.Loaded))
-            Write-Host "Captured post-wait window: $($case.Loaded)"
-            $results += "$($case.Url) : process alive; window captured twice"
+            Start-Sleep -Seconds 2
+            [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-startup.bmp"))
+
+            $pageMetric = $null
+            for ($i=0; $i -lt 120; $i++) {
+              if (Test-Path $metricsFile) {
+                $pageMetric = Get-Content $metricsFile | Where-Object { $_ -match '^page_load_ms=' } | Select-Object -Last 1
+                if ($pageMetric) { break }
+              }
+              if ($proc.HasExited) { throw "Browser exited before CEF reported page load for $($case.Url)." }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $pageMetric) { throw "No CEF main-frame load timing was reported within 60 seconds for $($case.Url)." }
+            [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-loaded.bmp"))
+
+            $proc.Refresh()
+            $memoryMb = [math]::Round($proc.WorkingSet64 / 1MB,1)
+            $summary += ""
+            $summary += "URL: $($case.Url)"
+            $summary += "Startup to visible window: $startupMs ms"
+            $summary += "CEF page load: $pageMetric"
+            $summary += "Browser main-process working set after load: $memoryMb MB"
+            $summary += "Browser main PID: $($proc.Id)"
+            Write-Host "$($case.Name): startup=$startupMs ms; $pageMetric; working_set=$memoryMb MB"
+
             Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "DesktopBrowser.exe" } |
               ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 2
           }
-
-          $results | Set-Content (Join-Path $env.SCREENSHOT_DIR "SMOKE_TEST_RESULTS.txt")
-          $images = Get-ChildItem $env.SCREENSHOT_DIR -Filter "*.bmp"
-          if ($images.Count -ne 4) { throw "Expected 4 screenshots, found $($images.Count)." }
-          foreach ($image in $images) {
-            if ($image.Length -lt 10000) { throw "Screenshot appears unexpectedly small: $($image.Name)" }
-            Write-Host "$($image.Name) - $($image.Length) bytes"
+          $summary | Set-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
+          $screens = Get-ChildItem $evidence -Filter "*.bmp"
+          if ($screens.Count -ne 4) { throw "Expected four screenshots; found $($screens.Count)." }
+          foreach ($screen in $screens) {
+            if ($screen.Length -lt 10000) { throw "Screenshot is unexpectedly small: $($screen.Name)" }
           }
 
-      - name: Upload screenshots and runtime logs
+      - name: Upload performance results, screenshots and CEF metrics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-browser-runtime-test-evidence
-          path: ${{ runner.temp }}/DesktopBrowserScreenshots/
+          name: desktop-browser-runtime-performance-evidence
+          path: ${{ runner.temp }}/DesktopBrowserPerformanceEvidence/
           if-no-files-found: warn
           retention-days: 14
