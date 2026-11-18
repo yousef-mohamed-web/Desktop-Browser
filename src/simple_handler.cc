@@ -79,6 +79,8 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   if (session_restore_pending_ > 0) {
     --session_restore_pending_;
     if (session_restore_pending_ == 0) SaveSession();
+  } else {
+    SaveSession();
   }
   NotifyShellChanged();
   RECT rc = {};
