@@ -1,11 +1,16 @@
 name: Desktop Browser - Windows Runtime Performance Test
 
 on:
+  push:
+    branches:
+      - implementation/cef-win32-host
+    paths:
+      - ".github/workflows/cef-runtime-smoke-test.yml"
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: "Successful CEF host build run ID containing the timing instrumentation"
-        required: true
+        description: "Optional successful CEF host build run ID; leave empty to use the latest successful build for this commit"
+        required: false
         default: ""
         type: string
 
@@ -33,7 +38,689 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $sourceRunId = "${{ inputs.source_run_id }}"
-          if ($sourceRunId -notmatch '^\d+$') { throw "source_run_id must be numeric." }
+          if ([string]::IsNullOrWhiteSpace($sourceRunId)) {
+            Write-Host "No source_run_id supplied. Waiting for the CEF host build for this exact commit..."
+            $deadline = (Get-Date).AddMinutes(65)
+            do {
+              $runsJson = gh run list --repo "${{ github.repository }}" --workflow "cef-host.yml" --branch "${{ github.ref_name }}" --commit "${{ github.sha }}" --limit 10 --json databaseId,status,conclusion
+              if ($LASTEXITCODE -ne 0) { throw "Could not query CEF host workflow runs." }
+              $runs = @($runsJson | ConvertFrom-Json)
+              $successful = $runs | Where-Object { $_.status -eq "completed" -and $_.conclusion -eq "success" } | Select-Object -First 1
+              $failed = $runs | Where-Object { $_.status -eq "completed" -and $_.conclusion -ne "success" } | Select-Object -First 1
+              if ($successful) { $sourceRunId = [string]$successful.databaseId; break }
+              if ($failed) { throw "CEF host build for this commit completed with conclusion '$($failed.conclusion)' (run $($failed.databaseId))." }
+              if ((Get-Date) -ge $deadline) { throw "Timed out waiting for the CEF host build for commit ${{ github.sha }}." }
+              Start-Sleep -Seconds 30
+            } while (-not $sourceRunId)
+          }
+          if ($sourceRunId -notmatch '^\d+
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          gh run download $sourceRunId --repo "${{ github.repository }}" --name "desktop-browser-cef-host-x64" --dir $artifactDir
+          if ($LASTEXITCODE -ne 0) { throw "Could not download browser build artifact from run $sourceRunId." }
+          foreach ($name in @("DesktopBrowser.exe", "DesktopBrowser.dll", "libcef.dll")) {
+            if (-not (Test-Path (Join-Path $artifactDir $name))) { throw "Missing required file: $name" }
+          }
+          "BROWSER_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Google Chrome independently
+        shell: pwsh
+        timeout-minutes: 25
+        run: |
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $evidence = Join-Path $env:RUNNER_TEMP "DesktopBrowserPerformanceEvidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          "EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $status = @("THIRD-PARTY BROWSER INSTALLATION STATUS")
+          $chromeAvailable = $false
+
+          # Google Chrome: official Google enterprise MSI, authenticated by its code-signing certificate.
+          try {
+            $msi = Join-Path $env:RUNNER_TEMP "GoogleChromeEnterprise64.msi"
+            Invoke-WebRequest -Uri "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi" -OutFile $msi -MaximumRedirection 5
+            $signature = Get-AuthenticodeSignature -FilePath $msi
+            if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Google") {
+              throw "Chrome MSI lacks a valid Google Authenticode signature."
+            }
+            $install = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", $msi, "/qn", "/norestart") -Wait -PassThru
+            if ($install.ExitCode -notin @(0, 3010)) { throw "Chrome MSI installer returned exit code $($install.ExitCode)." }
+            $chromeCandidates = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe")
+            $chromeExe = $chromeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $chromeExe) { throw "Google Chrome executable was not found after installation." }
+            $chromeAvailable = $true
+            $status += "Google Chrome: INSTALLED ($chromeExe)"
+            "CHROME_EXE=$chromeExe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } catch {
+            Write-Warning "Google Chrome unavailable: $($_.Exception.Message)"
+            $status += "Google Chrome: FAILED - $($_.Exception.Message)"
+          }
+
+          "CHROME_AVAILABLE=$($chromeAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $status | Set-Content (Join-Path $evidence "INSTALLATION_STATUS.txt")
+          Write-Host ($status -join [Environment]::NewLine)
+
+          # Optional third-party browser failures must not fail this setup step or block CEF/Edge/Chrome tests.
+          $global:LASTEXITCODE = 0
+          exit 0
+
+      - name: Launch browser and measure startup and page loading
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = "Stop"
+          $helper = @'
+          using System;
+          using System.IO;
+          using System.Runtime.InteropServices;
+
+          public static class WindowCapture {
+            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+            [DllImport("user32.dll")] static extern IntPtr GetWindowDC(IntPtr hwnd);
+            [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
+            [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dst, int x, int y, int width, int height, IntPtr src, int srcX, int srcY, uint rop);
+            [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr hdc, IntPtr bitmap, uint start, uint lines, IntPtr bits, IntPtr info, uint usage);
+            [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+            [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr hdc);
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+            public static IntPtr FindVisibleWindowForProcess(uint pid) {
+              IntPtr found = IntPtr.Zero;
+              EnumWindows(delegate(IntPtr hwnd, IntPtr state) {
+                uint owner;
+                GetWindowThreadProcessId(hwnd, out owner);
+                if (owner == pid && IsWindowVisible(hwnd)) { found = hwnd; return false; }
+                return true;
+              }, IntPtr.Zero);
+              return found;
+            }
+
+            public static void Save(IntPtr hwnd, string path) {
+              RECT r;
+              if (!GetWindowRect(hwnd, out r)) throw new Exception("GetWindowRect failed.");
+              int width = r.Right-r.Left, height = r.Bottom-r.Top;
+              if (width < 200 || height < 150) throw new Exception("Invalid window dimensions.");
+              IntPtr screen = GetWindowDC(IntPtr.Zero), memory = IntPtr.Zero, bitmap = IntPtr.Zero, old = IntPtr.Zero, info = IntPtr.Zero, pixelsPtr = IntPtr.Zero;
+              if (screen == IntPtr.Zero) throw new Exception("GetWindowDC failed.");
+              try {
+                memory = CreateCompatibleDC(screen); bitmap = CreateCompatibleBitmap(screen,width,height);
+                if (memory == IntPtr.Zero || bitmap == IntPtr.Zero) throw new Exception("GDI allocation failed.");
+                old = SelectObject(memory,bitmap);
+                if (!BitBlt(memory,0,0,width,height,screen,r.Left,r.Top,0x00CC0020)) throw new Exception("BitBlt failed.");
+                int stride=((width*3+3)/4)*4, bytes=stride*height;
+                info=Marshal.AllocHGlobal(40); for(int i=0;i<40;i++) Marshal.WriteByte(info,i,0);
+                Marshal.WriteInt32(info,0,40); Marshal.WriteInt32(info,4,width); Marshal.WriteInt32(info,8,-height);
+                Marshal.WriteInt16(info,12,1); Marshal.WriteInt16(info,14,24); Marshal.WriteInt32(info,20,bytes);
+                pixelsPtr=Marshal.AllocHGlobal(bytes);
+                if(GetDIBits(memory,bitmap,0,(uint)height,pixelsPtr,info,0)==0) throw new Exception("GetDIBits failed.");
+                byte[] pixels=new byte[bytes]; Marshal.Copy(pixelsPtr,pixels,0,bytes);
+                using(FileStream fs=new FileStream(path,FileMode.Create,FileAccess.Write)) {
+                  byte[] header=new byte[14]; header[0]=0x42; header[1]=0x4D;
+                  BitConverter.GetBytes(54+bytes).CopyTo(header,2); BitConverter.GetBytes(54).CopyTo(header,10);
+                  fs.Write(header,0,14); byte[] dib=new byte[40]; Marshal.Copy(info,dib,0,40);
+                  fs.Write(dib,0,40); fs.Write(pixels,0,pixels.Length);
+                }
+              } finally {
+                if(pixelsPtr!=IntPtr.Zero) Marshal.FreeHGlobal(pixelsPtr);
+                if(info!=IntPtr.Zero) Marshal.FreeHGlobal(info);
+                if(old!=IntPtr.Zero && memory!=IntPtr.Zero) SelectObject(memory,old);
+                if(bitmap!=IntPtr.Zero) DeleteObject(bitmap);
+                if(memory!=IntPtr.Zero) DeleteDC(memory);
+                ReleaseDC(IntPtr.Zero,screen);
+              }
+            }
+          }
+          '@
+          Add-Type -TypeDefinition $helper -ReferencedAssemblies "System.dll"
+
+          $evidence = Join-Path $env:RUNNER_TEMP "DesktopBrowserPerformanceEvidence"
+          New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+          "EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $exe = Join-Path $env:BROWSER_DIR "DesktopBrowser.exe"
+          $cases = @(
+            @{ Name="example"; Url="https://example.com/" },
+            @{ Name="wikipedia"; Url="https://www.wikipedia.org/" },
+            @{ Name="chatgpt"; Url="https://chatgpt.com/" },
+            @{ Name="github"; Url="https://github.com/" },
+            @{ Name="claude"; Url="https://claude.com/" },
+            @{ Name="mdn"; Url="https://developer.mozilla.org/" },
+            @{ Name="reddit"; Url="https://www.reddit.com/" },
+            @{ Name="stackoverflow"; Url="https://stackoverflow.com/" }
+          )
+          $summary = @(
+            "Desktop Browser runtime performance test",
+            "Runner: Windows Server 2022 x64 (GitHub-hosted; not a low-end PC benchmark)",
+            "Startup metric: process launch to first visible top-level window owned by the browser process.",
+            "Page-load metric: CEF main-frame OnLoadStart to OnLoadEnd callback.",
+            "Memory metrics: browser process tree (main + all descendant CEF/Chromium processes), renderer-only subtotal, working set and private bytes.",
+            "Memory sampling: ten 1-second post-load quiescent samples; report average and peak. This is whole-app memory, not a tab-only estimate.",
+            "CPU sampling: browser process-tree cumulative CPU time deltas across the same quiescent samples, normalized by logical processor count.",
+            "Scope: this prototype currently creates one CEF browser instance. Genuine 1/5/10-tab scenarios and separate cold/warm startup protocols are deferred until the corresponding product capabilities and controlled profile-reset procedure exist."
+          )
+          $osInfo = Get-CimInstance Win32_OperatingSystem
+          $logicalCpuCount = [Environment]::ProcessorCount
+          $totalRamMb = [math]::Round(([double]$osInfo.TotalVisibleMemorySize * 1KB) / 1MB, 0)
+          $summary += "Environment: OS=$($osInfo.Caption); logical_processors=$logicalCpuCount; visible_RAM=$totalRamMb MB"
+          function Get-BrowserProcessTree([int]$RootPid) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.HashSet[int]]::new()
+            [void]$ids.Add($RootPid)
+            $changed = $true
+            while ($changed) {
+              $changed = $false
+              foreach ($p in $all) {
+                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
+                  [void]$ids.Add([int]$p.ProcessId)
+                  $changed = $true
+                }
+              }
+            }
+            $rows = foreach ($p in $all) {
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($g) {
+                  [pscustomobject]@{
+                    Pid = [int]$p.ProcessId
+                    ParentPid = [int]$p.ParentProcessId
+                    Type = if ($p.CommandLine -match '--type=([^\s"]+)') { $Matches[1] } else { 'browser' }
+                    WorkingSetBytes = [int64]$g.WorkingSet64
+                    PrivateBytes = [int64]$g.PrivateMemorySize64
+                    CpuTimeMs = [double]$g.TotalProcessorTime.TotalMilliseconds
+                  }
+                }
+              }
+            }
+            return @($rows)
+          }
+
+          foreach ($case in $cases) {
+            Write-Host "Testing $($case.Url)"
+            $metricsFile = Join-Path $evidence "$($case.Name)-cef-metrics.txt"
+            Remove-Item $metricsFile -Force -ErrorAction SilentlyContinue
+            $env:DESKTOP_BROWSER_METRICS_FILE = $metricsFile
+            $clock = [System.Diagnostics.Stopwatch]::StartNew()
+            $proc = Start-Process -FilePath $exe -ArgumentList @("--url=$($case.Url)") -WorkingDirectory $env:BROWSER_DIR -PassThru
+            $hwnd = [IntPtr]::Zero
+            for ($i=0; $i -lt 90; $i++) {
+              Start-Sleep -Milliseconds 500
+              $hwnd = [WindowCapture]::FindVisibleWindowForProcess([uint32]$proc.Id)
+              if ($hwnd -ne [IntPtr]::Zero) { break }
+              if ($proc.HasExited) { throw "Browser process exited before creating a visible window. Exit code: $($proc.ExitCode)" }
+            }
+            if ($hwnd -eq [IntPtr]::Zero) { throw "No visible top-level window owned by browser PID $($proc.Id) appeared within 45 seconds." }
+            $clock.Stop()
+            $startupMs = $clock.ElapsedMilliseconds
+            [WindowCapture]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Seconds 2
+            [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-startup.bmp"))
+
+            $pageMetric = $null
+            for ($i=0; $i -lt 120; $i++) {
+              if (Test-Path $metricsFile) {
+                $pageMetric = Get-Content $metricsFile | Where-Object { $_ -match '^page_load_ms=' } | Select-Object -Last 1
+                if ($pageMetric) { break }
+              }
+              if ($proc.HasExited) { throw "Browser exited before CEF reported page load for $($case.Url)." }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $pageMetric) { throw "No CEF main-frame load timing was reported within 60 seconds for $($case.Url)." }
+            [WindowCapture]::Save($hwnd,(Join-Path $evidence "$($case.Name)-loaded.bmp"))
+
+            # Allow short-lived post-load renderer/GPU allocations to settle, then sample the full process tree.
+            Start-Sleep -Seconds 3
+            $samples = @()
+            $processRows = @()
+            for ($sample=0; $sample -lt 10; $sample++) {
+              $rows = @(Get-BrowserProcessTree -RootPid $proc.Id)
+              if ($rows.Count -gt 0) {
+                $processRows = $rows
+                $samples += [pscustomobject]@{
+                  WorkingSet = [int64](($rows | Measure-Object WorkingSetBytes -Sum).Sum)
+                  PrivateBytes = [int64](($rows | Measure-Object PrivateBytes -Sum).Sum)
+                  RendererWorkingSet = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object WorkingSetBytes -Sum).Sum)
+                  RendererPrivateBytes = [int64](($rows | Where-Object Type -eq 'renderer' | Measure-Object PrivateBytes -Sum).Sum)
+                  CpuTimeMs = [double](($rows | Measure-Object CpuTimeMs -Sum).Sum)
+                  SampleTimeUtc = [DateTime]::UtcNow
+                  ProcessCount = $rows.Count
+                }
+              }
+              Start-Sleep -Seconds 1
+            }
+            if ($samples.Count -eq 0) { throw "Could not collect browser process-tree memory metrics." }
+            $avgWs = [math]::Round((($samples | Measure-Object WorkingSet -Average).Average) / 1MB,1)
+            $peakWs = [math]::Round((($samples | Measure-Object WorkingSet -Maximum).Maximum) / 1MB,1)
+            $avgPrivate = [math]::Round((($samples | Measure-Object PrivateBytes -Average).Average) / 1MB,1)
+            $peakPrivate = [math]::Round((($samples | Measure-Object PrivateBytes -Maximum).Maximum) / 1MB,1)
+            $avgRendererWs = [math]::Round((($samples | Measure-Object RendererWorkingSet -Average).Average) / 1MB,1)
+            $avgRendererPrivate = [math]::Round((($samples | Measure-Object RendererPrivateBytes -Average).Average) / 1MB,1)
+            $processCount = [int](($samples | Measure-Object ProcessCount -Maximum).Maximum)
+            $cpuPercentages = @()
+            for ($sample=1; $sample -lt $samples.Count; $sample++) {
+              $elapsedMs = ($samples[$sample].SampleTimeUtc - $samples[$sample-1].SampleTimeUtc).TotalMilliseconds
+              $cpuDeltaMs = $samples[$sample].CpuTimeMs - $samples[$sample-1].CpuTimeMs
+              if ($elapsedMs -gt 0) {
+                $cpuPercentages += [math]::Max(0, ($cpuDeltaMs / $elapsedMs / [Environment]::ProcessorCount) * 100)
+              }
+            }
+            $avgCpu = if ($cpuPercentages.Count -gt 0) { [math]::Round((($cpuPercentages | Measure-Object -Average).Average),2) } else { 0 }
+            $peakCpu = if ($cpuPercentages.Count -gt 0) { [math]::Round((($cpuPercentages | Measure-Object -Maximum).Maximum),2) } else { 0 }
+            $summary += ""
+            $summary += "URL: $($case.Url)"
+            $summary += "Startup to visible window: $startupMs ms"
+            $summary += "CEF page load: $pageMetric"
+            $summary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
+            $summary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+            $summary += "Post-load quiescent CPU (whole process tree, normalized to total logical CPU): average=$avgCpu%; peak=$peakCpu%"
+            $summary += "Renderer-only memory: working_set_avg=$avgRendererWs MB; private_bytes_avg=$avgRendererPrivate MB"
+            $summary += "Browser process count: $processCount"
+            $summary += "Browser main PID: $($proc.Id)"
+            $summary += "Process breakdown (PID | parent PID | type | working set MB | private MB):"
+            foreach ($r in $processRows) {
+              $summary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WorkingSetBytes/1MB,1)) | $([math]::Round($r.PrivateBytes/1MB,1))"
+            }
+            Write-Host "$($case.Name): startup=$startupMs ms; $pageMetric; process_tree_ws_avg=$avgWs MB peak=$peakWs MB; private_avg=$avgPrivate MB; renderers_ws_avg=$avgRendererWs MB; processes=$processCount"
+
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "DesktopBrowser.exe" } |
+              ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+          }
+          $summary | Set-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
+          # Each of the five CEF test sites must produce both startup and loaded screenshots.
+          $expectedScreenshotNames = @()
+          foreach ($site in @("example", "wikipedia", "chatgpt", "github", "claude", "mdn", "reddit", "stackoverflow")) {
+            $expectedScreenshotNames += "$site-startup.bmp"
+            $expectedScreenshotNames += "$site-loaded.bmp"
+          }
+          $screens = @(Get-ChildItem $evidence -Filter "*.bmp" -File)
+          $actualScreenshotNames = @($screens | ForEach-Object { $_.Name })
+          $missingScreenshots = @($expectedScreenshotNames | Where-Object { $_ -notin $actualScreenshotNames })
+          $unexpectedScreenshots = @($actualScreenshotNames | Where-Object { $_ -notin $expectedScreenshotNames })
+          if ($missingScreenshots.Count -gt 0 -or $unexpectedScreenshots.Count -gt 0 -or $screens.Count -ne $expectedScreenshotNames.Count) {
+            throw "Screenshot validation failed. Expected $($expectedScreenshotNames.Count) named screenshots; found $($screens.Count). Missing: $($missingScreenshots -join ', '). Unexpected: $($unexpectedScreenshots -join ', ')."
+          }
+          foreach ($screen in $screens) {
+            if ($screen.Length -lt 10000) { throw "Screenshot is unexpectedly small: $($screen.Name)" }
+          }
+
+
+      - name: Measure Microsoft Edge on the same runner
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          $edgeCandidates = @(
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
+          )
+          $edgeExe = $edgeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $edgeExe) { throw "Microsoft Edge was not found on this Windows runner." }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class EdgeWindowProbe {
+            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            public static IntPtr Find(uint pid) {
+              IntPtr found=IntPtr.Zero;
+              EnumWindows(delegate(IntPtr h,IntPtr s) {
+                uint owner; GetWindowThreadProcessId(h,out owner);
+                if(owner==pid && IsWindowVisible(h)){found=h;return false;} return true;
+              },IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          function Get-Tree([int]$RootPid) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.HashSet[int]]::new()
+            [void]$ids.Add($RootPid); $changed = $true
+            while ($changed) {
+              $changed = $false
+              foreach ($p in $all) {
+                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
+                  [void]$ids.Add([int]$p.ProcessId); $changed = $true
+                }
+              }
+            }
+            foreach ($p in $all) {
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($g) {
+                  [pscustomobject]@{
+                    Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
+                    Type=if($p.CommandLine -match '--type=([^\s"]+)'){$Matches[1]}else{'browser'}
+                    WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
+                    CpuTimeMs=[double]$g.TotalProcessorTime.TotalMilliseconds
+                  }
+                }
+              }
+            }
+          }
+          function Get-CdpPage($Port) {
+            for($n=0;$n -lt 60;$n++){
+              try {
+                $targets=Invoke-RestMethod -Uri "http://127.0.0.1:$Port/json" -TimeoutSec 2
+                $page=$targets | Where-Object { $_.type -eq "page" -and $_.webSocketDebuggerUrl } | Select-Object -First 1
+                if($page){return $page}
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            }
+            throw "Edge DevTools endpoint did not become ready."
+          }
+          function Invoke-CdpEvaluate($Socket,[int]$Id,[string]$Expression) {
+            $payload=@{id=$Id;method="Runtime.evaluate";params=@{expression=$Expression;returnByValue=$true}} | ConvertTo-Json -Depth 8 -Compress
+            $bytes=[System.Text.Encoding]::UTF8.GetBytes($payload)
+            $segment=[ArraySegment[byte]]::new($bytes)
+            $Socket.SendAsync($segment,[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+            $buffer=New-Object byte[] 65536
+            while($true){
+              $ms=[System.IO.MemoryStream]::new()
+              do {
+                $seg=[ArraySegment[byte]]::new($buffer)
+                $recv=$Socket.ReceiveAsync($seg,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+                if($recv.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close){throw "Edge DevTools WebSocket closed."}
+                $ms.Write($buffer,0,$recv.Count)
+              } while(-not $recv.EndOfMessage)
+              $msg=[System.Text.Encoding]::UTF8.GetString($ms.ToArray()) | ConvertFrom-Json
+              if($msg.id -eq $Id){return $msg}
+            }
+          }
+          $evidence=$env:EVIDENCE_DIR
+          $edgeSummary=@(
+            "",
+            "MICROSOFT EDGE (same Windows Server 2022 x64 runner)",
+            "Startup metric: process launch to first visible top-level window owned by Edge's initial process.",
+            "Page-load metric: Navigation Timing API loadEventEnd minus navigationStart, read through Edge DevTools Protocol.",
+            "Note: Desktop Browser uses CEF OnLoadStart-to-OnLoadEnd; page-load boundaries differ slightly and are reported separately.",
+            "Memory metrics: Edge root process plus all descendant processes; working set and private bytes summed across the process tree."
+          )
+          $caseIndex=0
+          foreach($case in @(
+            @{Name="example";Url="https://example.com/"},
+            @{Name="wikipedia";Url="https://www.wikipedia.org/"},
+            @{Name="chatgpt";Url="https://chatgpt.com/"},
+            @{Name="github";Url="https://github.com/"},
+            @{Name="claude";Url="https://claude.com/"},
+            @{Name="mdn";Url="https://developer.mozilla.org/"},
+            @{Name="reddit";Url="https://www.reddit.com/"},
+            @{Name="stackoverflow";Url="https://stackoverflow.com/"},
+            @{Name="mdn";Url="https://developer.mozilla.org/"},
+            @{Name="reddit";Url="https://www.reddit.com/"},
+            @{Name="stackoverflow";Url="https://stackoverflow.com/"}
+          )){
+            $caseIndex++; $profile=Join-Path $env:RUNNER_TEMP "EdgeProfile-$caseIndex"; $port=9220+$caseIndex
+            $clock=[System.Diagnostics.Stopwatch]::StartNew()
+            $edge=Start-Process -FilePath $edgeExe -ArgumentList @("--user-data-dir=$profile","--remote-debugging-port=$port","--no-first-run","--no-default-browser-check","--disable-background-mode",$case.Url) -PassThru
+            $hwnd=[IntPtr]::Zero
+            for($i=0;$i -lt 90;$i++){
+              Start-Sleep -Milliseconds 500; $hwnd=[EdgeWindowProbe]::Find([uint32]$edge.Id)
+              if($hwnd -ne [IntPtr]::Zero){break}
+              if($edge.HasExited){throw "Edge exited before creating a visible window."}
+            }
+            if($hwnd -eq [IntPtr]::Zero){throw "Edge did not create a visible window within 45 seconds."}
+            $clock.Stop(); $startupMs=$clock.ElapsedMilliseconds
+            $target=Get-CdpPage $port
+            $socket=[System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.KeepAliveInterval=[TimeSpan]::FromSeconds(20)
+            $socket.ConnectAsync([Uri]$target.webSocketDebuggerUrl,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+            try {
+              $ready=$false; $loadMs=$null
+              for($i=0;$i -lt 120;$i++){
+                $response=Invoke-CdpEvaluate $socket 1 "(()=>{const n=performance.getEntriesByType('navigation')[0];return {state:document.readyState,loadMs:n&&n.loadEventEnd>0?n.loadEventEnd-n.startTime:null}})()"
+                $value=$response.result.result.value
+                if($value.state -eq "complete" -and $null -ne $value.loadMs -and [double]$value.loadMs -gt 0){$ready=$true;$loadMs=[math]::Round([double]$value.loadMs,1);break}
+                Start-Sleep -Milliseconds 500
+              }
+              if(-not $ready){throw "Edge did not report a completed navigation timing for $($case.Url)."}
+              Start-Sleep -Seconds 3; $samples=@(); $lastRows=@()
+              for($s=0;$s -lt 10;$s++){
+                $rows=@(Get-Tree -RootPid $edge.Id)
+                if($rows.Count -gt 0){
+                  $lastRows=$rows
+                  $samples += [pscustomobject]@{
+                    WS=[int64](($rows|Measure-Object WS -Sum).Sum)
+                    Private=[int64](($rows|Measure-Object Private -Sum).Sum)
+                    RendererWS=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object WS -Sum).Sum)
+                    RendererPrivate=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object Private -Sum).Sum)
+                    CpuTimeMs=[double](($rows|Measure-Object CpuTimeMs -Sum).Sum)
+                    SampleTimeUtc=[DateTime]::UtcNow
+                    Count=$rows.Count
+                  }
+                }
+                Start-Sleep -Seconds 1
+              }
+              if($samples.Count -eq 0){throw "Could not collect Edge process-tree memory."}
+              $avgWs=[math]::Round((($samples|Measure-Object WS -Average).Average)/1MB,1)
+              $peakWs=[math]::Round((($samples|Measure-Object WS -Maximum).Maximum)/1MB,1)
+              $avgPrivate=[math]::Round((($samples|Measure-Object Private -Average).Average)/1MB,1)
+              $peakPrivate=[math]::Round((($samples|Measure-Object Private -Maximum).Maximum)/1MB,1)
+              $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
+              $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
+              $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
+              $cpuPercentages=@()
+              for($s=1;$s -lt $samples.Count;$s++){
+                $elapsedMs=($samples[$s].SampleTimeUtc-$samples[$s-1].SampleTimeUtc).TotalMilliseconds
+                $cpuDeltaMs=$samples[$s].CpuTimeMs-$samples[$s-1].CpuTimeMs
+                if($elapsedMs -gt 0){$cpuPercentages += [math]::Max(0,($cpuDeltaMs/$elapsedMs/[Environment]::ProcessorCount)*100)}
+              }
+              $avgCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Average).Average),2)}else{0}
+              $peakCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Maximum).Maximum),2)}else{0}
+              $edgeSummary += ""; $edgeSummary += "URL: $($case.Url)"
+              $edgeSummary += "Startup to visible window: $startupMs ms"
+              $edgeSummary += "Edge Navigation Timing load event: $loadMs ms"
+              $edgeSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
+              $edgeSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+              $edgeSummary += "Post-load quiescent CPU (whole process tree, normalized to total logical CPU): average=$avgCpu%; peak=$peakCpu%"
+              $edgeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
+              $edgeSummary += "Browser process count (max across samples): $maxCount"
+              $edgeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
+              foreach($r in $lastRows){$edgeSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
+              Write-Host "Edge $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
+            } finally {
+              $socket.Dispose()
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "msedge.exe" -and $_.CommandLine -like "*$profile*" } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+              Start-Sleep -Seconds 2
+            }
+          }
+          $edgeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
+          $edgeSummary | Set-Content (Join-Path $evidence "EDGE_PERFORMANCE_RESULTS.txt")
+
+      - name: Measure Google Chrome on the same runner
+        if: env.CHROME_AVAILABLE == 'true'
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Stop"
+          $chromeExe = $env:CHROME_EXE
+          if (-not (Test-Path $chromeExe)) { throw "Google Chrome executable was not found." }
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class ChromeWindowProbe {
+            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+            public static IntPtr Find(uint pid) {
+              IntPtr found=IntPtr.Zero;
+              EnumWindows(delegate(IntPtr h,IntPtr s) {
+                uint owner; GetWindowThreadProcessId(h,out owner);
+                if(owner==pid && IsWindowVisible(h)){found=h;return false;} return true;
+              },IntPtr.Zero);
+              return found;
+            }
+          }
+          '@
+          function Get-Tree([int]$RootPid) {
+            $all = @(Get-CimInstance Win32_Process)
+            $ids = [System.Collections.Generic.HashSet[int]]::new()
+            [void]$ids.Add($RootPid); $changed = $true
+            while ($changed) {
+              $changed = $false
+              foreach ($p in $all) {
+                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
+                  [void]$ids.Add([int]$p.ProcessId); $changed = $true
+                }
+              }
+            }
+            foreach ($p in $all) {
+              if ($ids.Contains([int]$p.ProcessId)) {
+                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+                if ($g) {
+                  [pscustomobject]@{
+                    Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
+                    Type=if($p.CommandLine -match '--type=([^\s"]+)'){$Matches[1]}else{'browser'}
+                    WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
+                    CpuTimeMs=[double]$g.TotalProcessorTime.TotalMilliseconds
+                  }
+                }
+              }
+            }
+          }
+          function Get-CdpPage($Port) {
+            for($n=0;$n -lt 60;$n++){
+              try {
+                $targets=Invoke-RestMethod -Uri "http://127.0.0.1:$Port/json" -TimeoutSec 2
+                $page=$targets | Where-Object { $_.type -eq "page" -and $_.webSocketDebuggerUrl } | Select-Object -First 1
+                if($page){return $page}
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            }
+            throw "Chrome DevTools endpoint did not become ready."
+          }
+          function Invoke-CdpEvaluate($Socket,[int]$Id,[string]$Expression) {
+            $payload=@{id=$Id;method="Runtime.evaluate";params=@{expression=$Expression;returnByValue=$true}} | ConvertTo-Json -Depth 8 -Compress
+            $bytes=[System.Text.Encoding]::UTF8.GetBytes($payload)
+            $segment=[ArraySegment[byte]]::new($bytes)
+            $Socket.SendAsync($segment,[System.Net.WebSockets.WebSocketMessageType]::Text,$true,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+            $buffer=New-Object byte[] 65536
+            while($true){
+              $ms=[System.IO.MemoryStream]::new()
+              do {
+                $seg=[ArraySegment[byte]]::new($buffer)
+                $recv=$Socket.ReceiveAsync($seg,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+                if($recv.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close){throw "Chrome DevTools WebSocket closed."}
+                $ms.Write($buffer,0,$recv.Count)
+              } while(-not $recv.EndOfMessage)
+              $msg=[System.Text.Encoding]::UTF8.GetString($ms.ToArray()) | ConvertFrom-Json
+              if($msg.id -eq $Id){return $msg}
+            }
+          }
+          $evidence=$env:EVIDENCE_DIR
+          $chromeSummary=@(
+            "",
+            "GOOGLE CHROME (same Windows Server 2022 x64 runner)",
+            "Startup metric: process launch to first visible top-level window owned by Chrome's initial process.",
+            "Page-load metric: Navigation Timing API loadEventEnd minus navigationStart, read through Chrome DevTools Protocol.",
+            "Note: Desktop Browser uses CEF OnLoadStart-to-OnLoadEnd; page-load boundaries differ slightly and are reported separately.",
+            "Memory metrics: Chrome root process plus all descendant processes; working set and private bytes summed across the process tree."
+          )
+          $caseIndex=0
+          foreach($case in @(
+            @{Name="example";Url="https://example.com/"},
+            @{Name="wikipedia";Url="https://www.wikipedia.org/"},
+            @{Name="chatgpt";Url="https://chatgpt.com/"},
+            @{Name="github";Url="https://github.com/"},
+            @{Name="claude";Url="https://claude.com/"}
+          )){
+            $caseIndex++; $profile=Join-Path $env:RUNNER_TEMP "ChromeProfile-$caseIndex"; $port=9320+$caseIndex
+            $clock=[System.Diagnostics.Stopwatch]::StartNew()
+            $chrome=Start-Process -FilePath $chromeExe -ArgumentList @("--user-data-dir=$profile","--remote-debugging-port=$port","--no-first-run","--no-default-browser-check","--disable-background-mode",$case.Url) -PassThru
+            $hwnd=[IntPtr]::Zero
+            for($i=0;$i -lt 90;$i++){
+              Start-Sleep -Milliseconds 500; $hwnd=[ChromeWindowProbe]::Find([uint32]$chrome.Id)
+              if($hwnd -ne [IntPtr]::Zero){break}
+              if($chrome.HasExited){throw "Chrome exited before creating a visible window."}
+            }
+            if($hwnd -eq [IntPtr]::Zero){throw "Chrome did not create a visible window within 45 seconds."}
+            $clock.Stop(); $startupMs=$clock.ElapsedMilliseconds
+            $target=Get-CdpPage $port
+            $socket=[System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.KeepAliveInterval=[TimeSpan]::FromSeconds(20)
+            $socket.ConnectAsync([Uri]$target.webSocketDebuggerUrl,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
+            try {
+              $ready=$false; $loadMs=$null
+              for($i=0;$i -lt 240;$i++){
+                $response=Invoke-CdpEvaluate $socket 1 "(()=>{const n=performance.getEntriesByType('navigation')[0];return {state:document.readyState,loadMs:n&&n.loadEventEnd>0?n.loadEventEnd-n.startTime:null}})()"
+                $value=$response.result.result.value
+                if($value.state -eq "complete" -and $null -ne $value.loadMs -and [double]$value.loadMs -gt 0){$ready=$true;$loadMs=[math]::Round([double]$value.loadMs,1);break}
+                Start-Sleep -Milliseconds 500
+              }
+              if(-not $ready){throw "Chrome did not report a completed navigation timing for $($case.Url)."}
+              Start-Sleep -Seconds 3; $samples=@(); $lastRows=@()
+              for($s=0;$s -lt 10;$s++){
+                $rows=@(Get-Tree -RootPid $chrome.Id)
+                if($rows.Count -gt 0){
+                  $lastRows=$rows
+                  $samples += [pscustomobject]@{
+                    WS=[int64](($rows|Measure-Object WS -Sum).Sum)
+                    Private=[int64](($rows|Measure-Object Private -Sum).Sum)
+                    RendererWS=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object WS -Sum).Sum)
+                    RendererPrivate=[int64](($rows|Where-Object Type -eq 'renderer'|Measure-Object Private -Sum).Sum)
+                    CpuTimeMs=[double](($rows|Measure-Object CpuTimeMs -Sum).Sum)
+                    SampleTimeUtc=[DateTime]::UtcNow
+                    Count=$rows.Count
+                  }
+                }
+                Start-Sleep -Seconds 1
+              }
+              if($samples.Count -eq 0){throw "Could not collect Chrome process-tree memory."}
+              $avgWs=[math]::Round((($samples|Measure-Object WS -Average).Average)/1MB,1)
+              $peakWs=[math]::Round((($samples|Measure-Object WS -Maximum).Maximum)/1MB,1)
+              $avgPrivate=[math]::Round((($samples|Measure-Object Private -Average).Average)/1MB,1)
+              $peakPrivate=[math]::Round((($samples|Measure-Object Private -Maximum).Maximum)/1MB,1)
+              $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
+              $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
+              $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
+              $cpuPercentages=@()
+              for($s=1;$s -lt $samples.Count;$s++){
+                $elapsedMs=($samples[$s].SampleTimeUtc-$samples[$s-1].SampleTimeUtc).TotalMilliseconds
+                $cpuDeltaMs=$samples[$s].CpuTimeMs-$samples[$s-1].CpuTimeMs
+                if($elapsedMs -gt 0){$cpuPercentages += [math]::Max(0,($cpuDeltaMs/$elapsedMs/[Environment]::ProcessorCount)*100)}
+              }
+              $avgCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Average).Average),2)}else{0}
+              $peakCpu=if($cpuPercentages.Count -gt 0){[math]::Round((($cpuPercentages|Measure-Object -Maximum).Maximum),2)}else{0}
+              $chromeSummary += ""; $chromeSummary += "URL: $($case.Url)"
+              $chromeSummary += "Startup to visible window: $startupMs ms"
+              $chromeSummary += "Chrome Navigation Timing load event: $loadMs ms"
+              $chromeSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
+              $chromeSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
+              $chromeSummary += "Post-load quiescent CPU (whole process tree, normalized to total logical CPU): average=$avgCpu%; peak=$peakCpu%"
+              $chromeSummary += "Renderer-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
+              $chromeSummary += "Browser process count (max across samples): $maxCount"
+              $chromeSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
+              foreach($r in $lastRows){$chromeSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
+              Write-Host "Chrome $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
+            } finally {
+              $socket.Dispose()
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "mschrome.exe" -and $_.CommandLine -like "*$profile*" } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+              Start-Sleep -Seconds 2
+            }
+          }
+          $chromeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
+          $chromeSummary | Set-Content (Join-Path $evidence "CHROME_PERFORMANCE_RESULTS.txt")
+
+      - name: Upload performance results, screenshots and CEF metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-browser-runtime-performance-evidence
+          path: ${{ runner.temp }}/DesktopBrowserPerformanceEvidence/
+          if-no-files-found: warn
+          retention-days: 14) { throw "source_run_id must be numeric." }
+          Write-Host "Using successful CEF host build run $sourceRunId."
           $artifactDir = Join-Path $env:RUNNER_TEMP "DesktopBrowserArtifact"
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
           gh run download $sourceRunId --repo "${{ github.repository }}" --name "desktop-browser-cef-host-x64" --dir $artifactDir
