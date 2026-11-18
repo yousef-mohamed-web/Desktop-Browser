@@ -76,7 +76,10 @@ void SimpleHandler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   if (!browser) return;
   tab_manager_.Add(browser);
   tab_titles_[browser->GetIdentifier()] = L"New Tab";
-  SaveSession();
+  if (session_restore_pending_ > 0) {
+    --session_restore_pending_;
+    if (session_restore_pending_ == 0) SaveSession();
+  }
   NotifyShellChanged();
   RECT rc = {};
   if (main_window_ && GetClientRect(main_window_, &rc))
@@ -122,7 +125,7 @@ void SimpleHandler::OnAddressChange(CefRefPtr<CefBrowser> browser,
     CefRefPtr<CefFrame> frame, const CefString& url) {
   CEF_REQUIRE_UI_THREAD();
   if (browser && frame && frame->IsMain()) {
-    SaveSession();
+    if (session_restore_pending_ == 0) SaveSession();
     NotifyShellChanged();
   }
 }
@@ -279,8 +282,14 @@ std::vector<std::string> SimpleHandler::LoadSavedSession() {
   return urls;
 }
 
+void SimpleHandler::SetSessionRestoreCount(size_t count) {
+  CEF_REQUIRE_UI_THREAD();
+  session_restore_pending_ = count;
+}
+
 void SimpleHandler::SaveSession() const {
   CEF_REQUIRE_UI_THREAD();
+  if (session_restore_pending_ > 0) return;
   const std::wstring path = SessionFilePath();
   if (path.empty()) return;
   std::string data;
