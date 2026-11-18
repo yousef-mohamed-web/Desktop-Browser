@@ -5,6 +5,8 @@
 
 #include <windows.h>
 #include <algorithm>
+#include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -37,14 +39,35 @@ WNDPROC g_tab_button_original_proc = nullptr;
 
 LRESULT CALLBACK TabButtonProc(HWND button, UINT message, WPARAM wparam, LPARAM lparam) {
   const int index = static_cast<int>(GetWindowLongPtrW(button, GWLP_USERDATA));
-  if (message == WM_LBUTTONDOWN) SetCapture(button);
-  if (message == WM_MOUSEMOVE && (wparam & MK_LBUTTON) && index >= 0) {
-    POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+  if (message == WM_LBUTTONDOWN) {
+    SetCapture(button);
+  } else if (message == WM_LBUTTONUP && GetCapture() == button) {
+    POINT point = {static_cast<LONG>(static_cast<short>(LOWORD(lparam))),
+                   static_cast<LONG>(static_cast<short>(HIWORD(lparam)))};
     MapWindowPoints(button, GetParent(button), &point, 1);
-    const int target = (std::max)(0, (point.x - 4) / 182);
-    PostMessageW(GetParent(button), kTabReorderMessage, index, target);
+
+    // Resolve the drop target from the actual tab button rectangles instead
+    // of assuming a fixed tab width. This also works after window resizing.
+    int target = index;
+    int nearest_distance = (std::numeric_limits<int>::max)();
+    HWND parent = GetParent(button);
+    for (int i = 0; i < g_tab_button_count; ++i) {
+      if (!g_tab_buttons[i] || !IsWindow(g_tab_buttons[i])) continue;
+      RECT rect = {};
+      if (!GetWindowRect(g_tab_buttons[i], &rect)) continue;
+      MapWindowPoints(nullptr, parent,
+          reinterpret_cast<POINT*>(&rect), 2);
+      const int center = (rect.left + rect.right) / 2;
+      const int distance = abs(point.x - center);
+      if (distance < nearest_distance) {
+        nearest_distance = distance;
+        target = i;
+      }
+    }
+    if (index >= 0 && index < g_tab_button_count && target != index)
+      PostMessageW(parent, kTabReorderMessage, index, target);
+    ReleaseCapture();
   }
-  if (message == WM_LBUTTONUP && GetCapture() == button) ReleaseCapture();
   return CallWindowProcW(g_tab_button_original_proc, button, message, wparam, lparam);
 }
 HFONT g_ui_font = nullptr;
