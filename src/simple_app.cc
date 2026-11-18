@@ -407,7 +407,23 @@ void SimpleApp::OnContextInitialized() {
       CefCommandLine::GetGlobalCommandLine();
   const CefString startup_url =
       command_line ? command_line->GetSwitchValue("url") : CefString();
-  const std::string initial_url =
-      startup_url.empty() ? BuiltInHomePage() : startup_url.ToString();
-  handler_->CreateBrowserTab(initial_url);
+  if (!startup_url.empty()) {
+    handler_->CreateBrowserTab(startup_url.ToString());
+    return;
+  }
+
+  // Restore the last persisted tab list after normal exit or a crash. The
+  // handler suppresses intermediate writes until every restored browser has
+  // completed OnAfterCreated, preventing a partial list from replacing it.
+  const std::vector<std::string> saved_urls = SimpleHandler::LoadSavedSession();
+  if (!saved_urls.empty()) {
+    size_t created = 0;
+    for (const auto& url : saved_urls) {
+      if (handler_->CreateBrowserTab(url)) ++created;
+    }
+    handler_->SetSessionRestoreCount(created);
+    if (created == 0) handler_->CreateBrowserTab(BuiltInHomePage());
+  } else {
+    handler_->CreateBrowserTab(BuiltInHomePage());
+  }
 }
