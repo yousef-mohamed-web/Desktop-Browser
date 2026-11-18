@@ -42,11 +42,20 @@ bool SimpleHandler::CreateBrowserTab(const std::string& url) {
   CEF_REQUIRE_UI_THREAD();
   if (!main_window_ || !IsWindow(main_window_)) return false;
   RECT rc = {};
-  GetClientRect(main_window_, &rc);
+  if (!GetClientRect(main_window_, &rc)) return false;
+
+  // Win32 RECT coordinates use LONG while CefRect and std::max use int.
+  // Normalize dimensions before constructing the CEF child-window bounds.
+  const int client_width = static_cast<int>(rc.right - rc.left);
+  const int client_height = static_cast<int>(rc.bottom - rc.top);
+  const int browser_width = (std::max)(1, client_width);
+  const int browser_height =
+      (std::max)(1, client_height - kNavigationBarHeight);
+
   CefWindowInfo wi;
-  wi.SetAsChild(main_window_, CefRect(0, kNavigationBarHeight,
-      (std::max)(1, rc.right - rc.left),
-      (std::max)(1, rc.bottom - rc.top - kNavigationBarHeight)));
+  wi.SetAsChild(main_window_,
+                CefRect(0, kNavigationBarHeight, browser_width,
+                        browser_height));
   wi.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
   CefBrowserSettings settings;
   return CefBrowserHost::CreateBrowser(wi, this, url, settings, nullptr, nullptr);
