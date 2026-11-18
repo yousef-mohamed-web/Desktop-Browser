@@ -43,7 +43,7 @@ jobs:
           }
           "BROWSER_DIR=$artifactDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Install Google Chrome, Zen Browser and GeckoDriver independently
+      - name: Install Google Chrome independently
         shell: pwsh
         timeout-minutes: 25
         run: |
@@ -54,8 +54,6 @@ jobs:
           "EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Append
           $status = @("THIRD-PARTY BROWSER INSTALLATION STATUS")
           $chromeAvailable = $false
-          $zenAvailable = $false
-          $geckoAvailable = $false
 
           # Google Chrome: official Google enterprise MSI, authenticated by its code-signing certificate.
           try {
@@ -78,77 +76,7 @@ jobs:
             $status += "Google Chrome: FAILED - $($_.Exception.Message)"
           }
 
-          # Zen Browser: pinned official GitHub release; verify its published SHA-256 before silent installation.
-          try {
-            $zenVersion = "1.24.2b"
-            $zenUrl = "https://github.com/zen-browser/desktop/releases/download/$zenVersion/zen.installer.exe"
-            $zenInstaller = Join-Path $env:RUNNER_TEMP "zen.installer.exe"
-            $zenExpectedSha256 = "bd53e63028b84fd77a4c734873d485d98b59921f4a6a6617cb654b2f9f1585bc"
-            Invoke-WebRequest -Uri $zenUrl -OutFile $zenInstaller -MaximumRedirection 5
-            $zenActualSha256 = (Get-FileHash -Path $zenInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($zenActualSha256 -ne $zenExpectedSha256) {
-              throw "Zen installer SHA-256 mismatch. Expected $zenExpectedSha256; got $zenActualSha256."
-            }
-            $zenInstall = Start-Process -FilePath $zenInstaller -ArgumentList @("/S", "/PreventRebootRequired=true") -Wait -PassThru
-            if ($zenInstall.ExitCode -ne 0) { throw "Zen installer returned exit code $($zenInstall.ExitCode)." }
-            $zenCandidates = @(
-              "$env:ProgramFiles\Zen Browser\zen.exe",
-              "$env:ProgramFiles\Zen\zen.exe",
-              "${env:ProgramFiles(x86)}\Zen Browser\zen.exe",
-              "$env:LOCALAPPDATA\Programs\Zen Browser\zen.exe",
-              "$env:LOCALAPPDATA\Zen Browser\zen.exe"
-            )
-            $zenExe = $zenCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-            if (-not $zenExe) {
-              $zenExe = Get-ChildItem "$env:ProgramFiles" -Filter "zen.exe" -Recurse -ErrorAction SilentlyContinue |
-                Select-Object -First 1 -ExpandProperty FullName
-            }
-            if (-not $zenExe) { throw "Zen Browser executable was not found after installation." }
-            $zenAvailable = $true
-            $status += "Zen Browser: INSTALLED ($zenExe; release $zenVersion; SHA-256 verified)"
-            "ZEN_EXE=$zenExe" | Out-File -FilePath $env:GITHUB_ENV -Append
-          } catch {
-            Write-Warning "Zen Browser unavailable: $($_.Exception.Message)"
-            $status += "Zen Browser: FAILED - $($_.Exception.Message)"
-          }
-
-          # GeckoDriver: pinned Mozilla-maintained GitHub release asset; no Chocolatey dependency.
-          try {
-            $geckoVersion = "0.37.1"
-            $geckoUrl = "https://github.com/mozilla/geckodriver/releases/download/v$geckoVersion/geckodriver-v$geckoVersion-win64.zip"
-            $geckoZip = Join-Path $env:RUNNER_TEMP "geckodriver-win64.zip"
-            $geckoDir = Join-Path $env:RUNNER_TEMP "GeckoDriver"
-            Invoke-WebRequest -Uri $geckoUrl -OutFile $geckoZip -MaximumRedirection 5
-            $archive = [System.IO.Compression.ZipFile]::OpenRead($geckoZip)
-            try {
-              if (-not ($archive.Entries | Where-Object { $_.FullName -eq "geckodriver.exe" })) {
-                throw "Official GeckoDriver archive does not contain geckodriver.exe."
-              }
-            } finally {
-              $archive.Dispose()
-            }
-            New-Item -ItemType Directory -Force -Path $geckoDir | Out-Null
-            Expand-Archive -Path $geckoZip -DestinationPath $geckoDir -Force
-            $geckoExe = Join-Path $geckoDir "geckodriver.exe"
-            if (-not (Test-Path $geckoExe)) { throw "geckodriver.exe was not found after extraction." }
-            $versionOutput = & $geckoExe --version 2>&1
-            $versionExit = $LASTEXITCODE
-            $global:LASTEXITCODE = 0
-            if ($versionExit -ne 0 -or ($versionOutput -join " ") -notmatch "geckodriver $geckoVersion") {
-              throw "Downloaded GeckoDriver did not report expected version $geckoVersion."
-            }
-            $geckoAvailable = $true
-            $status += "GeckoDriver: INSTALLED ($geckoExe; version $geckoVersion; official Mozilla GitHub release)"
-            $geckoDir | Out-File -FilePath $env:GITHUB_PATH -Append
-          } catch {
-            $global:LASTEXITCODE = 0
-            Write-Warning "GeckoDriver unavailable: $($_.Exception.Message)"
-            $status += "GeckoDriver: FAILED - $($_.Exception.Message)"
-          }
-
           "CHROME_AVAILABLE=$($chromeAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ZEN_AVAILABLE=$($zenAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "GECKODRIVER_AVAILABLE=$($geckoAvailable.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_ENV -Append
           $status | Set-Content (Join-Path $evidence "INSTALLATION_STATUS.txt")
           Write-Host ($status -join [Environment]::NewLine)
 
@@ -711,156 +639,6 @@ jobs:
           }
           $chromeSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
           $chromeSummary | Set-Content (Join-Path $evidence "CHROME_PERFORMANCE_RESULTS.txt")
-
-      - name: Measure Zen Browser on the same runner
-        if: env.ZEN_AVAILABLE == 'true' && env.GECKODRIVER_AVAILABLE == 'true'
-        shell: pwsh
-        timeout-minutes: 25
-        run: |
-          $ErrorActionPreference = "Stop"
-          Add-Type -TypeDefinition @'
-          using System;
-          using System.Runtime.InteropServices;
-          public static class ZenWindowProbe {
-            public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-            [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
-            [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
-            [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
-            public static IntPtr Find(uint pid) {
-              IntPtr found=IntPtr.Zero;
-              EnumWindows(delegate(IntPtr h,IntPtr s) {
-                uint owner; GetWindowThreadProcessId(h,out owner);
-                if(owner==pid && IsWindowVisible(h)){found=h;return false;} return true;
-              },IntPtr.Zero);
-              return found;
-            }
-          }
-          '@
-          function Get-Tree([int]$RootPid) {
-            $all = @(Get-CimInstance Win32_Process)
-            $ids = [System.Collections.Generic.HashSet[int]]::new()
-            [void]$ids.Add($RootPid); $changed = $true
-            while ($changed) {
-              $changed = $false
-              foreach ($p in $all) {
-                if ($ids.Contains([int]$p.ParentProcessId) -and -not $ids.Contains([int]$p.ProcessId)) {
-                  [void]$ids.Add([int]$p.ProcessId); $changed = $true
-                }
-              }
-            }
-            foreach ($p in $all) {
-              if ($ids.Contains([int]$p.ProcessId)) {
-                $g = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
-                if ($g) {
-                  [pscustomobject]@{
-                    Pid=[int]$p.ProcessId; ParentPid=[int]$p.ParentProcessId
-                    Type=if($p.CommandLine -match '-contentproc'){'content'}else{'browser'}
-                    WS=[int64]$g.WorkingSet64; Private=[int64]$g.PrivateMemorySize64
-                  }
-                }
-              }
-            }
-          }
-          $driver = Start-Process -FilePath (Get-Command geckodriver).Source -ArgumentList @("--host","127.0.0.1","--port","4444") -PassThru
-          try {
-            $driverReady = $false
-            for($i=0;$i -lt 40;$i++){
-              try { Invoke-RestMethod -Uri "http://127.0.0.1:4444/status" -TimeoutSec 2 | Out-Null; $driverReady=$true; break } catch { Start-Sleep -Milliseconds 500 }
-            }
-            if(-not $driverReady){throw "GeckoDriver did not become ready."}
-            $evidence=$env:EVIDENCE_DIR
-            $zenSummary=@(
-              "",
-              "ZEN BROWSER (same Windows Server 2022 x64 runner)",
-              "Startup metric: WebDriver session launch request to first visible Zen window.",
-              "Page-load metric: Navigation Timing API loadEventEnd minus navigationStart, read through Firefox WebDriver.",
-              "Memory metrics: Zen root process plus all descendant processes; working set and private bytes summed across the process tree.",
-              "Zen uses the Firefox/Gecko engine and is automated with GeckoDriver, not Chromium DevTools."
-            )
-            $caseIndex=0
-            foreach($case in @(
-              @{Name="example";Url="https://example.com/"},
-              @{Name="wikipedia";Url="https://www.wikipedia.org/"},
-              @{Name="chatgpt";Url="https://chatgpt.com/"},
-              @{Name="github";Url="https://github.com/"},
-              @{Name="claude";Url="https://claude.com/"}
-            )){
-              $caseIndex++
-              $profile=Join-Path $env:RUNNER_TEMP "ZenProfile-$caseIndex"
-              New-Item -ItemType Directory -Force -Path $profile | Out-Null
-              $body=@{capabilities=@{alwaysMatch=@{browserName="firefox";"moz:firefoxOptions"=@{binary=$env:ZEN_EXE;args=@("-no-remote","-profile",$profile)}}}} | ConvertTo-Json -Depth 12
-              $clock=[System.Diagnostics.Stopwatch]::StartNew()
-              $session=Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:4444/session" -ContentType "application/json" -Body $body -TimeoutSec 120
-              $sessionId=$session.value.sessionId
-              if(-not $sessionId){throw "GeckoDriver did not return a Zen WebDriver session."}
-              $zenProc=Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "zen.exe" } | Sort-Object CreationDate -Descending | Select-Object -First 1
-              if(-not $zenProc){throw "Zen process was not found after WebDriver launch."}
-              $hwnd=[IntPtr]::Zero
-              for($i=0;$i -lt 90;$i++){
-                $hwnd=[ZenWindowProbe]::Find([uint32]$zenProc.ProcessId)
-                if($hwnd -ne [IntPtr]::Zero){break}
-                Start-Sleep -Milliseconds 500
-              }
-              if($hwnd -eq [IntPtr]::Zero){throw "Zen did not create a visible window within 45 seconds."}
-              $clock.Stop(); $startupMs=$clock.ElapsedMilliseconds
-              try {
-                Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:4444/session/$sessionId/url" -ContentType "application/json" -Body (@{url=$case.Url}|ConvertTo-Json) -TimeoutSec 180 | Out-Null
-                $ready=$false; $loadMs=$null
-                for($i=0;$i -lt 240;$i++){
-                  $scriptBody=@{script="(()=>{const n=performance.getEntriesByType('navigation')[0];return {state:document.readyState,loadMs:n&&n.loadEventEnd>0?n.loadEventEnd-n.startTime:null}})()";args=@()}|ConvertTo-Json -Depth 6
-                  $result=Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:4444/session/$sessionId/execute/sync" -ContentType "application/json" -Body $scriptBody -TimeoutSec 15
-                  $value=$result.value
-                  if($value.state -eq "complete" -and $null -ne $value.loadMs -and [double]$value.loadMs -gt 0){$ready=$true;$loadMs=[math]::Round([double]$value.loadMs,1);break}
-                  Start-Sleep -Milliseconds 500
-                }
-                if(-not $ready){throw "Zen did not report a completed navigation timing for $($case.Url)."}
-                Start-Sleep -Seconds 3; $samples=@(); $lastRows=@()
-                for($s=0;$s -lt 5;$s++){
-                  $rows=@(Get-Tree -RootPid ([int]$zenProc.ProcessId))
-                  if($rows.Count -gt 0){
-                    $lastRows=$rows
-                    $samples += [pscustomobject]@{
-                      WS=[int64](($rows|Measure-Object WS -Sum).Sum)
-                      Private=[int64](($rows|Measure-Object Private -Sum).Sum)
-                      RendererWS=[int64](($rows|Where-Object Type -eq 'content'|Measure-Object WS -Sum).Sum)
-                      RendererPrivate=[int64](($rows|Where-Object Type -eq 'content'|Measure-Object Private -Sum).Sum)
-                      Count=$rows.Count
-                    }
-                  }
-                  Start-Sleep -Seconds 1
-                }
-                if($samples.Count -eq 0){throw "Could not collect Zen process-tree memory."}
-                $avgWs=[math]::Round((($samples|Measure-Object WS -Average).Average)/1MB,1)
-                $peakWs=[math]::Round((($samples|Measure-Object WS -Maximum).Maximum)/1MB,1)
-                $avgPrivate=[math]::Round((($samples|Measure-Object Private -Average).Average)/1MB,1)
-                $peakPrivate=[math]::Round((($samples|Measure-Object Private -Maximum).Maximum)/1MB,1)
-                $rendererWs=[math]::Round((($samples|Measure-Object RendererWS -Average).Average)/1MB,1)
-                $rendererPrivate=[math]::Round((($samples|Measure-Object RendererPrivate -Average).Average)/1MB,1)
-                $maxCount=[int](($samples|Measure-Object Count -Maximum).Maximum)
-                $zenSummary += ""; $zenSummary += "URL: $($case.Url)"
-                $zenSummary += "Startup to visible window: $startupMs ms"
-                $zenSummary += "Zen Navigation Timing load event: $loadMs ms"
-                $zenSummary += "Browser process-tree working set: average=$avgWs MB; peak=$peakWs MB"
-                $zenSummary += "Browser process-tree private bytes: average=$avgPrivate MB; peak=$peakPrivate MB"
-                $zenSummary += "Content-process-only memory: working_set_avg=$rendererWs MB; private_bytes_avg=$rendererPrivate MB"
-                $zenSummary += "Browser process count (max across samples): $maxCount"
-                $zenSummary += "Process breakdown (last sample; PID | parent PID | type | working set MB | private MB):"
-                foreach($r in $lastRows){$zenSummary += "$($r.Pid) | $($r.ParentPid) | $($r.Type) | $([math]::Round($r.WS/1MB,1)) | $([math]::Round($r.Private/1MB,1))"}
-                Write-Host "Zen $($case.Name): startup=$startupMs ms; load=$loadMs ms; tree WS avg=$avgWs MB; private avg=$avgPrivate MB"
-              } finally {
-                Invoke-RestMethod -Method Delete -Uri "http://127.0.0.1:4444/session/$sessionId" -TimeoutSec 30 | Out-Null
-                Get-CimInstance Win32_Process | Where-Object { $_.Name -eq "zen.exe" -and $_.CommandLine -like "*$profile*" } |
-                  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-                Start-Sleep -Seconds 2
-              }
-            }
-            $zenSummary | Add-Content (Join-Path $evidence "PERFORMANCE_RESULTS.txt")
-            $zenSummary | Set-Content (Join-Path $evidence "ZEN_PERFORMANCE_RESULTS.txt")
-          } finally {
-            Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
-          }
-
-
 
       - name: Upload performance results, screenshots and CEF metrics
         if: always()
